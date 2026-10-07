@@ -1,0 +1,433 @@
+/* Floor Supervisor kiosk presentation.
+   Colours come exclusively from the ARRISE tokens (see styles.py).
+   Visual language follows ARRISE Appearance: dark gradient header, violet-tinted
+   background, white cards with soft purple shadows, 20-26px card radii. */
+
+/* ---------------------------------------------------------------------------
+   Base & Streamlit chrome (kiosk mode)
+   --------------------------------------------------------------------------- */
+.stApp {
+    background:
+        radial-gradient(circle at 14% -8%, color-mix(in srgb, var(--color-violet-bright) 9%, transparent), transparent 32%),
+        var(--color-bg);
+    color: var(--color-text-primary);
+    font-family: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+#MainMenu,
+footer,
+header[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stAppDeployButton"] {
+    display: none !important;
+}
+
+[data-testid="stMainBlockContainer"],
+.block-container {
+    max-width: 960px;
+    padding: 18px 24px 28px !important;
+}
+
+/* Results must never look dimmed while Streamlit re-runs. */
+[data-stale="true"] {
+    opacity: 1 !important;
+}
+
+/* The focus helper iframe is functional only. */
+[data-testid="stElementContainer"]:has(iframe[title="Scanner focus helper"]) {
+    display: none !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Header
+   --------------------------------------------------------------------------- */
+.fs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 76px;
+    padding: 16px 24px;
+    border-radius: 22px;
+    background:
+        radial-gradient(circle at 72% 0%, color-mix(in srgb, var(--color-violet-bright) 22%, transparent), transparent 34%),
+        linear-gradient(112deg, var(--color-ink-deep) 0%, var(--color-primary-active) 52%, var(--color-primary) 100%);
+    box-shadow: 0 8px 26px color-mix(in srgb, var(--color-ink-deep) 16%, transparent);
+    color: var(--color-surface);
+}
+
+.fs-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+}
+
+.fs-brand-logo {
+    display: block;
+    width: 112px;
+    max-width: 30vw;
+    height: auto;
+    max-height: 36px;
+    object-fit: contain;
+    object-position: left center;
+    filter: brightness(0) invert(1);
+}
+
+.fs-brand-wordmark {
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: .16em;
+    line-height: 1;
+    color: var(--color-surface);
+}
+
+.fs-brand-divider {
+    width: 1px;
+    height: 26px;
+    background: color-mix(in srgb, var(--color-surface) 22%, transparent);
+}
+
+.fs-product {
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: .01em;
+    color: color-mix(in srgb, var(--color-surface) 82%, transparent);
+    white-space: nowrap;
+}
+
+/* Scanner readiness pill: reflects whether the scan input currently has focus. */
+.fs-scanner-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 0 14px;
+    border: 1px solid color-mix(in srgb, var(--color-surface) 18%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-surface) 9%, transparent);
+    font-size: 13px;
+    font-weight: 650;
+    white-space: nowrap;
+}
+
+.fs-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+
+.fs-scanner-pill .fs-dot {
+    background: var(--color-warning-fg);
+}
+
+.fs-scanner-pill .fs-when-ready { display: none; }
+.fs-scanner-pill .fs-when-idle { display: inline; }
+
+body:has([class*="st-key-scan_input_"] input:focus) .fs-scanner-pill .fs-dot {
+    background: var(--color-success-fg);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-success-fg) 22%, transparent);
+}
+body:has([class*="st-key-scan_input_"] input:focus) .fs-scanner-pill .fs-when-ready { display: inline; }
+body:has([class*="st-key-scan_input_"] input:focus) .fs-scanner-pill .fs-when-idle { display: none; }
+
+/* ---------------------------------------------------------------------------
+   Stage: idle prompt with an optional result layer stacked on top.
+   The result layer expires client-side (CSS animation), so the kiosk returns
+   to idle without polling the server and scanning is never blocked.
+   --------------------------------------------------------------------------- */
+.fs-stage {
+    display: grid;
+    margin-top: 18px;
+    min-height: clamp(340px, 54vh, 560px);
+}
+
+.fs-stage > .fs-layer {
+    grid-area: 1 / 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 36px 28px;
+    border: 1px solid var(--color-border);
+    border-radius: 26px;
+    text-align: center;
+    box-shadow: 0 14px 38px color-mix(in srgb, var(--color-primary) 9%, transparent);
+}
+
+.fs-idle {
+    background: var(--color-surface);
+}
+
+.fs-scan-icon {
+    display: grid;
+    place-items: center;
+    width: 112px;
+    height: 112px;
+    margin-bottom: 10px;
+    border-radius: 30px;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
+}
+
+/* Card glyph drawn with CSS (st.html strips inline SVG). */
+.fs-card-glyph {
+    position: relative;
+    width: 44px;
+    height: 60px;
+    border: 4px solid currentColor;
+    border-radius: 9px;
+}
+
+.fs-card-glyph::before {
+    content: "";
+    position: absolute;
+    left: 7px;
+    right: 7px;
+    top: 9px;
+    height: 4px;
+    border-radius: 2px;
+    background: currentColor;
+}
+
+.fs-card-glyph::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 9px;
+    width: 14px;
+    height: 14px;
+    margin-left: -7px;
+    border: 3px solid currentColor;
+    border-radius: 50%;
+}
+
+body:has([class*="st-key-scan_input_"] input:focus) .fs-scan-icon {
+    animation: fs-breathe 2.6s ease-in-out infinite;
+}
+
+.fs-title {
+    margin: 0;
+    font-size: clamp(30px, 5.2vw, 46px);
+    font-weight: 800;
+    line-height: 1.08;
+    letter-spacing: -.02em;
+    color: var(--color-ink);
+}
+
+.fs-subtitle {
+    margin: 0;
+    font-size: clamp(16px, 2.4vw, 20px);
+    color: var(--color-text-secondary);
+}
+
+/* Result layer.
+   Each result normally mounts a new element, which starts its own expiry timer.
+   If Streamlit ever reused the element, a CSS animation would not restart; a new
+   animation-name always does. Consecutive results therefore alternate between two
+   identical keyframe sets (a/b) so every result gets its full display time. */
+.fs-result {
+    animation-duration: 0.2s;
+    animation-timing-function: ease-in;
+    animation-fill-mode: forwards;
+    animation-delay: var(--fs-ttl, 3s);
+}
+
+.fs-result.fs-expire-a { animation-name: fs-expire-a; }
+.fs-result.fs-expire-b { animation-name: fs-expire-b; }
+
+.fs-result-icon {
+    display: grid;
+    place-items: center;
+    width: 108px;
+    height: 108px;
+    margin-bottom: 8px;
+    border-radius: 50%;
+    background: var(--color-surface);
+    font-size: 58px;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.fs-result-icon {
+    font-family: "Segoe UI Symbol", "Segoe UI", -apple-system, Roboto, Arial, sans-serif;
+}
+
+.fs-employee {
+    margin: 4px 0 0;
+    font-size: clamp(24px, 3.8vw, 34px);
+    font-weight: 750;
+    line-height: 1.15;
+    color: var(--color-text-primary);
+    overflow-wrap: anywhere;
+}
+
+.fs-details {
+    margin: 0;
+    font-size: clamp(16px, 2.3vw, 20px);
+    color: var(--color-text-secondary);
+}
+
+.fs-time {
+    display: inline-flex;
+    margin-top: 8px;
+    padding: 7px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-surface);
+    color: var(--color-text-primary);
+    font-size: 16px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.fs-message {
+    max-width: 620px;
+    margin: 12px 0 0;
+    padding: 12px 18px;
+    border-radius: 16px;
+    background: var(--color-surface);
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.fs-reference {
+    margin: 6px 0 0;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: .06em;
+    color: var(--color-text-tertiary);
+}
+
+/* Operational tones */
+.fs-tone-success { background: var(--color-success-bg); border-color: color-mix(in srgb, var(--color-success-fg) 30%, transparent); }
+.fs-tone-success .fs-title, .fs-tone-success .fs-result-icon, .fs-tone-success .fs-message { color: var(--color-success-fg); }
+
+.fs-tone-warning { background: var(--color-warning-bg); border-color: color-mix(in srgb, var(--color-warning-fg) 34%, transparent); }
+.fs-tone-warning .fs-title, .fs-tone-warning .fs-result-icon, .fs-tone-warning .fs-message { color: var(--color-warning-fg); }
+
+.fs-tone-info { background: var(--color-info-bg); border-color: color-mix(in srgb, var(--color-info-fg) 30%, transparent); }
+.fs-tone-info .fs-title, .fs-tone-info .fs-result-icon, .fs-tone-info .fs-message { color: var(--color-info-fg); }
+
+.fs-tone-error { background: var(--color-error-bg); border-color: color-mix(in srgb, var(--color-error-fg) 30%, transparent); }
+.fs-tone-error .fs-title, .fs-tone-error .fs-result-icon, .fs-tone-error .fs-message { color: var(--color-error-fg); }
+
+/* ---------------------------------------------------------------------------
+   Reader strip: the real scanner input (digits are never displayed) + system state
+   --------------------------------------------------------------------------- */
+[class*="st-key-scan_input_"] {
+    margin-top: 14px;
+}
+
+[class*="st-key-scan_input_"] [data-testid="stTextInputRootElement"] {
+    border-radius: 15px !important;
+    border-color: var(--color-border-strong) !important;
+    background: var(--color-surface) !important;
+}
+
+[class*="st-key-scan_input_"] input {
+    min-height: 54px;
+    color: transparent !important;
+    caret-color: transparent !important;
+    text-shadow: none !important;
+    text-align: center;
+    font-size: 16px;
+    cursor: default;
+}
+
+/* Streamlit's "Press Enter to apply" hint is noise on a kiosk. */
+[class*="st-key-scan_input_"] [data-testid="InputInstructions"] {
+    display: none !important;
+}
+
+[class*="st-key-scan_input_"] input::selection {
+    background: transparent;
+}
+
+[class*="st-key-scan_input_"] input::placeholder {
+    color: var(--color-text-tertiary) !important;
+    opacity: 1;
+}
+
+[class*="st-key-scan_input_"]:focus-within [data-testid="stTextInputRootElement"] {
+    border-color: var(--color-violet-bright) !important;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-violet-bright) 14%, transparent) !important;
+}
+
+.fs-system {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    margin-top: 12px;
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--color-text-secondary);
+}
+
+.fs-system .fs-dot {
+    background: var(--color-success-fg);
+}
+
+.fs-system.fs-system-down .fs-dot {
+    background: var(--color-error-fg);
+}
+
+.fs-device {
+    color: var(--color-text-tertiary);
+    font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+   Motion
+   --------------------------------------------------------------------------- */
+@keyframes fs-expire-a {
+    to { opacity: 0; visibility: hidden; }
+}
+
+@keyframes fs-expire-b {
+    to { opacity: 0; visibility: hidden; }
+}
+
+@keyframes fs-breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.04); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body:has([class*="st-key-scan_input_"] input:focus) .fs-scan-icon { animation: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   Responsive (tablet portrait / small screens)
+   --------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+    [data-testid="stMainBlockContainer"],
+    .block-container {
+        padding: 12px 14px 20px !important;
+    }
+
+    .fs-header {
+        flex-wrap: wrap;
+        padding: 14px 16px;
+        border-radius: 20px;
+    }
+
+    .fs-brand-wordmark { font-size: 20px; }
+    .fs-product { font-size: 13px; }
+
+    .fs-stage > .fs-layer {
+        padding: 28px 18px;
+        border-radius: 22px;
+    }
+
+    .fs-scan-icon, .fs-result-icon {
+        width: 88px;
+        height: 88px;
+    }
+}

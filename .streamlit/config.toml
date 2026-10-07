@@ -1,0 +1,29 @@
+[server]
+# Production bind: only reachable locally; Nginx proxies /floor-supervisor/.
+address = "127.0.0.1"
+port = 8003
+baseUrlPath = "floor-supervisor"
+headless = true
+runOnSave = false
+fileWatcherType = "none"
+enableXsrfProtection = true
+enableCORS = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# Kiosk: hide developer options and never show tracebacks in the browser.
+toolbarMode = "viewer"
+showErrorDetails = "none"
+
+[logger]
+level = "info"
+
+[theme]
+# Native widget colours aligned with the ARRISE tokens (see src/ui/styles.py).
+base = "light"
+primaryColor = "#35106a"
+backgroundColor = "#f7f5fb"
+secondaryBackgroundColor = "#f4f1f9"
+textColor = "#1a1424"

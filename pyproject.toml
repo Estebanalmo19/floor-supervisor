@@ -1,0 +1,10 @@
+[project]
+name = "floor-supervisor"
+version = "0.1.0"
+description = "Kiosk application that records employee card scans."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"

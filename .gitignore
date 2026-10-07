@@ -1,0 +1,56 @@
+# Secrets / environment (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+*.env
+*.env.bak
+.streamlit/secrets.toml
+
+# Credential / key material
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.ppk
+id_rsa*
+id_ed25519*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Scratch / temporary files (never commit one-off scripts or extracted references)
+scratchpad/
+scratch/
+tmp/
+*.tmp
+*.bak
+*.orig
+*.tar.gz
+*.zip
+
+# Local brand asset is supplied separately (not redistributed via git)
+assets/brand/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
