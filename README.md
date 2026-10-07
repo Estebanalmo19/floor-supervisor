@@ -79,7 +79,7 @@ Run the tests and the app:
 ```powershell
 & <venv-path>\Scripts\python.exe -m pytest
 & <venv-path>\Scripts\python.exe -m streamlit run app.py
-# open http://127.0.0.1:8003/floor-supervisor/
+# open http://127.0.0.1:8003/
 ```
 
 `floor_supervisor.scan_event` must exist before scans can be recorded
@@ -87,13 +87,21 @@ Run the tests and the app:
 
 ## Configuration
 
-See `.env.example`. Production on the VM uses `DB_PORT=5432`. The bind address,
-port and `/floor-supervisor` base path are in `.streamlit/config.toml`.
+See `.env.example`. Production on the VM uses `DB_PORT=5432`. The bind address
+and port are in `.streamlit/config.toml`; the app is served from the root path `/`.
+
+## Production routing
+
+Floor Supervisor has its own hostname and is served from the root path:
+
+```
+https://<floor-supervisor-host>/  →  Nginx  →  http://127.0.0.1:8003/
+```
 
 ## Before production
 
-- Restrict Nginx `location /floor-supervisor/` to the allowed site/corporate IP range
-  (there is no login).
-- Nginx must proxy WebSockets (`/floor-supervisor/_stcore/stream`): `proxy_http_version 1.1`,
+- Restrict the Floor Supervisor Nginx `server` block (`location /`) to the allowed
+  site/corporate IP range (there is no login).
+- Nginx must proxy WebSockets (`/_stcore/stream`): `proxy_http_version 1.1`,
   `Upgrade`/`Connection` headers, long `proxy_read_timeout`.
 - Validate scanner input + autofocus on the real tablet/browser.

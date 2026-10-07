@@ -1,8 +1,8 @@
 [server]
-# Production bind: only reachable locally; Nginx proxies /floor-supervisor/.
+# Production bind: only reachable locally. Served from the root path "/": Nginx proxies
+# the dedicated Floor Supervisor hostname to http://127.0.0.1:8003/.
 address = "127.0.0.1"
 port = 8003
-baseUrlPath = "floor-supervisor"
 headless = true
 runOnSave = false
 fileWatcherType = "none"
