@@ -168,4 +168,46 @@ def test_repository_ships_no_logo_asset():
 
 def test_focus_script_suppresses_on_screen_keyboard():
     script = build_autofocus_script("Card scan")
-    assert 'input.setAttribute("inputmode", "none")' in script
+    assert 'const INPUT_MODE = "none";' in script
+    assert 'input.setAttribute("inputmode", INPUT_MODE)' in script
+
+
+def test_focus_script_numeric_keypad_for_manual_entry():
+    assert 'const INPUT_MODE = "numeric";' in build_autofocus_script("HiBob ID", input_mode="numeric")
+
+
+def test_focus_script_rejects_unknown_input_mode():
+    import pytest
+    with pytest.raises(ValueError):
+        build_autofocus_script("HiBob ID", input_mode="text")
+
+
+# --- manual HiBob fallback screens -------------------------------------------------------
+
+
+def test_manual_entry_screen():
+    from src.ui.components import manual_entry_html
+
+    html = manual_entry_html()
+    assert "Enter HiBob ID" in html and "fs-inline-message" not in html
+    assert "Employee not found" in manual_entry_html("Employee not found. No scan was recorded.")
+    assert "&lt;b&gt;" in manual_entry_html("<b>x</b>")
+
+
+def test_manual_preview_shows_name_title_site_only():
+    from src.models.employee import Employee
+    from src.ui.components import manual_preview_html
+
+    employee = Employee("99999", "Test <Employee>", "Game Presenter", "Operations", "Test Site",
+                        "Inactive", "Terminated")
+    html = manual_preview_html(employee)
+    for text in ("Name", "Job title", "Site", "Test &lt;Employee&gt;", "Game Presenter", "Test Site"):
+        assert text in html
+    for hidden in ("Inactive", "Terminated", "Operations", "99999", "<Employee>"):
+        assert hidden not in html
+
+
+def test_manual_entry_badge_rendered_on_result():
+    view = ResultView(tone="success", icon="check", title="Scan registered", recorded=True,
+                      employee_name="Test Employee", badge="Manual entry")
+    assert '<span class="fs-badge">Manual entry</span>' in stage_html(view, ttl_seconds=3, sequence=1)

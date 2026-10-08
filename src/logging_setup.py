@@ -62,4 +62,7 @@ def configure_logging(level: str = "INFO") -> logging.Logger:
         handler._floor_supervisor = True  # type: ignore[attr-defined]
         logger.addHandler(handler)
     logger.propagate = False
+    # httpx logs "HTTP Request: POST <full url>" at INFO; the Power Automate URL is signed.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     return logger

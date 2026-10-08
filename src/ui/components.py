@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from html import escape
 
+from src.models.employee import Employee
 from src.ui.brand import Brand
 from src.ui.presenter import ResultView
 
@@ -58,6 +59,8 @@ def _result_layer(view: ResultView, ttl_seconds: float, sequence: int) -> str:
         f'<div class="fs-result-icon" aria-hidden="true">{_RESULT_ICONS.get(view.icon, "!")}</div>',
         f'<h1 class="fs-title">{escape(view.title)}</h1>',
     ]
+    if view.badge:
+        parts.append(f'<span class="fs-badge">{escape(view.badge)}</span>')
     if view.employee_name:
         parts.append(f'<p class="fs-employee">{escape(view.employee_name)}</p>')
     if view.details:
@@ -105,4 +108,38 @@ def configuration_error_html() -> str:
         '<p class="fs-message">The kiosk is not configured correctly. '
         "Please contact your supervisor.</p>"
         "</section></div>"
+    )
+
+
+# --- manual HiBob fallback ---------------------------------------------------------
+
+
+def manual_entry_html(inline_message: str | None = None) -> str:
+    """Header of the manual HiBob ID screen (the input and buttons are Streamlit widgets)."""
+    message = (f'<p class="fs-inline-message" role="alert">{escape(inline_message)}</p>'
+               if inline_message else "")
+    return (
+        '<section class="fs-manual" aria-label="Enter HiBob ID">'
+        '<p class="fs-manual-eyebrow">Card not recognized · Manual entry</p>'
+        '<h1 class="fs-title">Enter HiBob ID</h1>'
+        '<p class="fs-subtitle">Type the employee HiBob ID, then select Find employee.</p>'
+        f"{message}</section>"
+    )
+
+
+def manual_preview_html(employee: Employee) -> str:
+    """Employee preview before 'Confirm scan'. Name, job title and site only (never status)."""
+    rows = [("Name", employee.employee_name), ("Job title", employee.job_title),
+            ("Site", employee.site)]
+    items = "".join(
+        f'<div class="fs-preview-row"><dt>{escape(label)}</dt><dd>{escape(value or "—")}</dd></div>'
+        for label, value in rows
+    )
+    return (
+        '<section class="fs-manual" aria-label="Confirm employee">'
+        '<p class="fs-manual-eyebrow">Manual entry · Confirm employee</p>'
+        '<h1 class="fs-title">Is this the employee?</h1>'
+        f'<dl class="fs-preview">{items}</dl>'
+        '<p class="fs-subtitle">The scan is recorded only after Confirm scan.</p>'
+        "</section>"
     )

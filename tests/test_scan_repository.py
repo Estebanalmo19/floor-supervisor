@@ -5,7 +5,7 @@ import pytest
 
 from src.exceptions import RepositoryError
 from src.models.employee import Employee
-from src.models.scan import HibobLookupStatus, NewScanEvent
+from src.models.scan import EntryMethod, FallbackReason, HibobLookupStatus, NewScanEvent
 from src.repositories.scan_repository import (
     ADVISORY_LOCK_SQL,
     FIND_RECENT_SCAN_SQL,
@@ -105,7 +105,30 @@ def test_insert_params_for_found_employee():
         "lifecycle_status": "Employed",
         "device_id": "FLOOR_SUPERVISOR_TABLET_01",
         "scanned_at": SCANNED_AT,
+        "entry_method": "CARD",
+        "fallback_reason": None,
     }
+
+
+def test_insert_params_for_manual_fallback():
+    manual = NewScanEvent(
+        hibob_id="99999", hibob_lookup_status=HibobLookupStatus.FOUND, employee=EMPLOYEE,
+        device_id="FLOOR_SUPERVISOR_TABLET_01", scanned_at=SCANNED_AT,
+        entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK, fallback_reason=FallbackReason.CARD_NOT_RESOLVED,
+    )
+    db = _db()
+    ScanRepository(db.connection).record_if_not_duplicate(manual, 2)
+    params = db.executed[-1].params
+    assert params["entry_method"] == "MANUAL_HIBOB_FALLBACK"
+    assert params["fallback_reason"] == "CARD_NOT_RESOLVED"
+    assert params["card_resolver_employee_name"] is None
+    assert params["card_resolver_dataset_id"] is None
+    assert params["employee_name"] == "Test Employee"
+
+
+def test_duplicate_check_ignores_entry_method():
+    # Same device + hibob_id inside the window is a duplicate whether CARD or MANUAL.
+    assert "entry_method" not in FIND_RECENT_SCAN_SQL
 
 
 def test_insert_params_for_not_found_employee_have_null_snapshot():

@@ -384,6 +384,127 @@ body:has([class*="st-key-scan_input_"] input:focus) .fs-scan-icon {
 }
 
 /* ---------------------------------------------------------------------------
+   Manual HiBob fallback (only reachable after "Card not recognized")
+   --------------------------------------------------------------------------- */
+.fs-badge {
+    display: inline-flex;
+    margin-top: 2px;
+    padding: 5px 12px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 999px;
+    background: var(--color-surface);
+    color: var(--color-text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+.fs-manual {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-top: 18px;
+    padding: 30px 28px 18px;
+    border: 1px solid var(--color-border);
+    border-radius: 26px 26px 0 0;
+    background: var(--color-surface);
+    text-align: center;
+    box-shadow: 0 14px 38px color-mix(in srgb, var(--color-primary) 9%, transparent);
+}
+
+.fs-manual-eyebrow {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--color-violet-bright);
+}
+
+.fs-inline-message {
+    margin: 6px 0 0;
+    padding: 10px 16px;
+    border-radius: 14px;
+    background: var(--color-warning-bg);
+    color: var(--color-warning-fg);
+    font-size: 16px;
+    font-weight: 650;
+}
+
+.fs-preview {
+    display: grid;
+    gap: 10px;
+    width: min(100%, 520px);
+    margin: 10px 0 4px;
+    padding: 0;
+}
+
+.fs-preview-row {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    align-items: baseline;
+    gap: 14px;
+    padding: 12px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-surface-secondary);
+    text-align: left;
+}
+
+.fs-preview-row dt {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--color-text-tertiary);
+}
+
+.fs-preview-row dd {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    overflow-wrap: anywhere;
+}
+
+/* Manual HiBob ID input: digits are visible (unlike the hidden scanner input). */
+[class*="st-key-manual_hibob_id_"] [data-testid="stTextInputRootElement"] {
+    border-radius: 15px !important;
+    border-color: var(--color-border-strong) !important;
+    background: var(--color-surface) !important;
+}
+
+[class*="st-key-manual_hibob_id_"] input {
+    min-height: 58px;
+    text-align: center;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    color: var(--color-text-primary) !important;
+}
+
+[class*="st-key-manual_hibob_id_"] [data-testid="InputInstructions"] {
+    display: none !important;
+}
+
+/* Kiosk buttons (fallback offer, Find employee, Confirm scan, Cancel). */
+[class*="st-key-fs_btn_"] button {
+    width: 100%;
+    min-height: 56px;
+    border-radius: 15px !important;
+    font-size: 17px !important;
+    font-weight: 700 !important;
+}
+
+[class*="st-key-fs_btn_"] button[kind="secondary"] {
+    border-color: var(--color-border-strong) !important;
+    background: var(--color-surface) !important;
+    color: var(--color-text-primary) !important;
+}
+
+/* ---------------------------------------------------------------------------
    Motion
    --------------------------------------------------------------------------- */
 @keyframes fs-expire-a {

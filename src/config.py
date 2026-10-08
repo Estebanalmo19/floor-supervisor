@@ -39,6 +39,21 @@ class CardResolverSettings:
 
 
 @dataclass(frozen=True)
+class PowerAutomateSettings:
+    """Optional mirror to a Power Automate HTTP trigger. url=None disables it.
+
+    The URL contains a signed ``sig`` query parameter: it is a secret.
+    """
+
+    url: str | None = field(repr=False)
+    timeout_seconds: float
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.url)
+
+
+@dataclass(frozen=True)
 class Settings:
     app_env: str
     timezone: ZoneInfo
@@ -47,6 +62,7 @@ class Settings:
     log_level: str
     database: DatabaseSettings
     card_resolver: CardResolverSettings
+    power_automate: PowerAutomateSettings
 
 
 def load_settings(
@@ -84,6 +100,12 @@ def load_settings(
             "CARD_RESOLVER_TIMEOUT_SECONDS", default=5.0, minimum=0.5, maximum=30.0
         ),
     )
+    power_automate = PowerAutomateSettings(
+        url=reader.optional_secret_url("POWER_AUTOMATE_URL"),
+        timeout_seconds=reader.number(
+            "POWER_AUTOMATE_TIMEOUT_SECONDS", default=10.0, minimum=1.0, maximum=60.0
+        ),
+    )
     settings = Settings(
         app_env=reader.optional("APP_ENV", default="development"),
         timezone=reader.timezone("APP_TIMEZONE", default="America/Bogota"),
@@ -97,6 +119,7 @@ def load_settings(
         log_level=reader.choice("LOG_LEVEL", _LOG_LEVELS, default="INFO", upper=True),
         database=database,
         card_resolver=card_resolver,
+        power_automate=power_automate,
     )
 
     if reader.errors:
@@ -181,6 +204,15 @@ class _EnvReader:
         value = self.required(key)
         if value and not value.startswith(("https://", "http://")):
             self.errors.append(f"{key} must be an http(s) URL")
+        return value
+
+    def optional_secret_url(self, key: str) -> str | None:
+        """An optional https URL that is a secret: errors never include the value."""
+        value = self._get(key)
+        if value is None:
+            return None
+        if not value.startswith("https://"):
+            self.errors.append(f"{key} must be an https URL")
         return value
 
     def timezone(self, key: str, default: str) -> ZoneInfo:

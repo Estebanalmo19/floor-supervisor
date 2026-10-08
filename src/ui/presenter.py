@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import tzinfo
 from typing import Literal
 
-from src.models.scan import ScanOutcome, ScanResult, ScanWarning
+from src.models.scan import EntryMethod, ManualLookupStatus, ScanOutcome, ScanResult, ScanWarning
 
 Tone = Literal["success", "warning", "info", "error"]
 
@@ -51,6 +51,8 @@ class ResultView:
     time_label: str | None = None
     message: str | None = None
     reference: str | None = None
+    badge: str | None = None               # e.g. "Manual entry"
+    offers_manual_fallback: bool = False   # only CARD_NOT_RESOLVED
 
 
 # --- copy ----------------------------------------------------------------------
@@ -60,6 +62,13 @@ HIBOB_NOT_FOUND_MESSAGE = (
     "The scan was recorded successfully."
 )
 DUPLICATE_MESSAGE = "This card was scanned moments ago. No additional record was created."
+DUPLICATE_MANUAL_MESSAGE = "This employee was registered moments ago. No additional record was created."
+CARD_NOT_RECOGNIZED_MESSAGE = "Try scanning the card again or enter the employee HiBob ID."
+MANUAL_ENTRY_BADGE = "Manual entry"
+FALLBACK_EXPIRED_TITLE = "Manual entry expired"
+FALLBACK_EXPIRED_MESSAGE = "No scan was recorded. Please scan your card again."
+MANUAL_INVALID_ID_MESSAGE = "Enter a valid HiBob ID (numbers only)."
+MANUAL_NOT_FOUND_MESSAGE = "Employee not found. No scan was recorded."
 GENERIC_ERROR_TITLE = "Scan could not be completed"
 GENERIC_ERROR_MESSAGE = (
     "Scan was not recorded. Please try again. "
@@ -107,8 +116,11 @@ def present(
             icon="cross",
             title="Card not recognized",
             recorded=False,
-            message="Scan was not recorded.",
+            message=CARD_NOT_RECOGNIZED_MESSAGE,
+            offers_manual_fallback=result.fallback_ticket is not None,
         )
+    if outcome is ScanOutcome.FALLBACK_EXPIRED:
+        return FALLBACK_EXPIRED_VIEW
     if outcome in _ERROR_REFERENCES:
         return ResultView(
             tone="error",
@@ -124,6 +136,8 @@ def present(
     local_time = result.scanned_at.astimezone(display_timezone).strftime("%H:%M:%S")
     time_label = f"{local_time} · {time_zone_label}"
     details = _employee_details(result)
+    manual = result.entry_method is EntryMethod.MANUAL_HIBOB_FALLBACK
+    badge = MANUAL_ENTRY_BADGE if manual else None
 
     if outcome is ScanOutcome.DUPLICATE:
         return ResultView(
@@ -134,7 +148,8 @@ def present(
             employee_name=result.display_name,
             details=details,
             time_label=time_label,
-            message=DUPLICATE_MESSAGE,
+            message=DUPLICATE_MANUAL_MESSAGE if manual else DUPLICATE_MESSAGE,
+            badge=badge,
         )
 
     # RECORDED
@@ -154,7 +169,44 @@ def present(
         details=details,
         time_label=time_label,
         message=message,
+        badge=badge,
     )
+
+
+FALLBACK_EXPIRED_VIEW = ResultView(
+    tone="warning",
+    icon="alert",
+    title=FALLBACK_EXPIRED_TITLE,
+    recorded=False,
+    message=FALLBACK_EXPIRED_MESSAGE,
+)
+
+
+@dataclass(frozen=True)
+class ManualLookupView:
+    """What the manual screen does after 'Find employee'.
+
+    stay_on_manual_screen with an inline message, or leave with a full result view.
+    """
+
+    inline_message: str | None = None
+    result_view: ResultView | None = None
+
+
+def present_manual_lookup(status: ManualLookupStatus) -> ManualLookupView:
+    if status is ManualLookupStatus.INVALID_INPUT:
+        return ManualLookupView(inline_message=MANUAL_INVALID_ID_MESSAGE)
+    if status is ManualLookupStatus.EMPLOYEE_NOT_FOUND:
+        return ManualLookupView(inline_message=MANUAL_NOT_FOUND_MESSAGE)
+    if status is ManualLookupStatus.FALLBACK_EXPIRED:
+        return ManualLookupView(result_view=FALLBACK_EXPIRED_VIEW)
+    reference = {ManualLookupStatus.DATA_INTEGRITY_ERROR: "E03",
+                 ManualLookupStatus.DATABASE_ERROR: "E04"}.get(status)
+    if reference:
+        return ManualLookupView(result_view=ResultView(
+            tone="error", icon="cross", title=GENERIC_ERROR_TITLE, recorded=False,
+            message=GENERIC_ERROR_MESSAGE, reference=reference))
+    return ManualLookupView()  # FOUND: the UI shows the preview
 
 
 def _employee_details(result: ScanResult) -> tuple[str, ...]:

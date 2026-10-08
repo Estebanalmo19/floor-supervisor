@@ -69,3 +69,35 @@ def test_invalid_values_rejected(key, value):
     with pytest.raises(ConfigError) as exc_info:
         load_settings({**VALID_ENV, key: value})
     assert key in str(exc_info.value)
+
+
+# --- Power Automate ---------------------------------------------------------------------
+
+SIGNED = "https://flow.example.test/workflows/x/triggers/manual/paths/invoke?api-version=1&sig=TOPSECRETSIG"
+
+
+def test_power_automate_is_optional_and_disabled_without_url():
+    settings = load_settings(VALID_ENV)
+    assert settings.power_automate.url is None
+    assert settings.power_automate.enabled is False
+    assert settings.power_automate.timeout_seconds == 10.0
+
+
+def test_power_automate_enabled_with_https_url_and_secret_hidden():
+    settings = load_settings({**VALID_ENV, "POWER_AUTOMATE_URL": SIGNED, "POWER_AUTOMATE_TIMEOUT_SECONDS": "10"})
+    assert settings.power_automate.enabled is True
+    assert "TOPSECRETSIG" not in repr(settings)
+    assert "TOPSECRETSIG" not in repr(settings.power_automate)
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("POWER_AUTOMATE_URL", "http://flow.example.test/invoke?sig=TOPSECRETSIG"),
+    ("POWER_AUTOMATE_TIMEOUT_SECONDS", "0"),
+    ("POWER_AUTOMATE_TIMEOUT_SECONDS", "abc"),
+    ("POWER_AUTOMATE_TIMEOUT_SECONDS", "61"),
+])
+def test_power_automate_invalid_values_rejected_without_leaking(key, value):
+    with pytest.raises(ConfigError) as exc_info:
+        load_settings({**VALID_ENV, key: value})
+    assert key in str(exc_info.value)
+    assert "TOPSECRETSIG" not in str(exc_info.value)

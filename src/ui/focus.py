@@ -21,6 +21,7 @@ _SCRIPT_TEMPLATE = """<script>
 (function () {
   const LABEL = __LABEL__;
   const INTERVAL_MS = __INTERVAL__;
+  const INPUT_MODE = __INPUT_MODE__;
   const parentWindow = window.parent;
   const doc = parentWindow.document;
 
@@ -28,9 +29,10 @@ _SCRIPT_TEMPLATE = """<script>
     const selector = 'input[aria-label="' + CSS.escape(LABEL) + '"]';
     const input = doc.querySelector(selector);
     if (!input || input.disabled) { return; }
-    if (input.getAttribute("inputmode") !== "none") {
-      // Hardware scanner only: never open the tablet's on-screen keyboard.
-      input.setAttribute("inputmode", "none");
+    if (input.getAttribute("inputmode") !== INPUT_MODE) {
+      // "none": hardware scanner only, never open the tablet's on-screen keyboard.
+      // "numeric": manual HiBob ID entry opens the number pad.
+      input.setAttribute("inputmode", INPUT_MODE);
       input.setAttribute("autocorrect", "off");
       input.setAttribute("autocapitalize", "off");
       input.setAttribute("spellcheck", "false");
@@ -52,21 +54,28 @@ _SCRIPT_TEMPLATE = """<script>
 </script>"""
 
 
-def build_autofocus_script(input_label: str, interval_ms: int = DEFAULT_INTERVAL_MS) -> str:
+def build_autofocus_script(input_label: str, interval_ms: int = DEFAULT_INTERVAL_MS,
+                           input_mode: str = "none") -> str:
     """Return the HTML/JS snippet that keeps ``input_label`` focused.
 
     The label is JSON-encoded and ``</`` is escaped so the value cannot break
-    out of the script element.
+    out of the script element. ``input_mode`` is "none" for the hardware scanner
+    and "numeric" for manual HiBob ID entry.
     """
     if not input_label:
         raise ValueError("input_label must not be empty")
     if not 50 <= interval_ms <= 5000:
         raise ValueError("interval_ms must be between 50 and 5000")
+    if input_mode not in ("none", "numeric"):
+        raise ValueError("input_mode must be 'none' or 'numeric'")
     label_js = json.dumps(input_label).replace("</", "<\\/")
-    return _SCRIPT_TEMPLATE.replace("__LABEL__", label_js).replace("__INTERVAL__", str(interval_ms))
+    return (_SCRIPT_TEMPLATE.replace("__LABEL__", label_js)
+            .replace("__INTERVAL__", str(interval_ms))
+            .replace("__INPUT_MODE__", json.dumps(input_mode)))
 
 
-def render_autofocus(input_label: str, interval_ms: int = DEFAULT_INTERVAL_MS) -> None:
+def render_autofocus(input_label: str, interval_ms: int = DEFAULT_INTERVAL_MS,
+                     input_mode: str = "none") -> None:
     """Inject the focus script into the current Streamlit page.
 
     ``st.iframe`` runs HTML strings with same-origin access to the app, which the
@@ -76,7 +85,7 @@ def render_autofocus(input_label: str, interval_ms: int = DEFAULT_INTERVAL_MS) -
     import streamlit as st
 
     st.iframe(
-        build_autofocus_script(input_label, interval_ms),
+        build_autofocus_script(input_label, interval_ms, input_mode),
         height=1,
         tab_index=-1,
         alt="Scanner focus helper",

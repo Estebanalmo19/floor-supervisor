@@ -4,7 +4,14 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.models.employee import Employee
-from src.models.scan import ScanOutcome, ScanResult, ScanWarning
+from src.models.scan import (
+    EntryMethod,
+    FallbackTicket,
+    ManualLookupStatus,
+    ScanOutcome,
+    ScanResult,
+    ScanWarning,
+)
 from src.ui.presenter import (
     DEFAULT_TIMINGS,
     DUPLICATE_MESSAGE,
@@ -14,6 +21,7 @@ from src.ui.presenter import (
     UNEXPECTED_ERROR_VIEW,
     ResultTimings,
     present,
+    present_manual_lookup,
 )
 
 BOGOTA = ZoneInfo("America/Bogota")
@@ -91,12 +99,57 @@ def test_name_mismatch_is_not_a_warning_type():
     assert "NAME_MISMATCH" not in {w.value for w in ScanWarning}
 
 
-def test_card_not_resolved_is_error_not_recorded():
-    view = present(ScanResult(outcome=ScanOutcome.CARD_NOT_RESOLVED, scanned_at=T0), BOGOTA)
+def test_card_not_resolved_is_error_and_offers_fallback_only_with_ticket():
+    ticket = FallbackTicket(issued_at=T0, device_id="TABLET")
+    view = present(ScanResult(outcome=ScanOutcome.CARD_NOT_RESOLVED, scanned_at=T0,
+                              fallback_ticket=ticket), BOGOTA)
     assert view.tone == "error"
     assert view.title == "Card not recognized"
-    assert view.message == "Scan was not recorded."
+    assert view.message == "Try scanning the card again or enter the employee HiBob ID."
     assert view.recorded is False
+    assert view.offers_manual_fallback is True
+    no_ticket = present(ScanResult(outcome=ScanOutcome.CARD_NOT_RESOLVED, scanned_at=T0), BOGOTA)
+    assert no_ticket.offers_manual_fallback is False
+
+
+@pytest.mark.parametrize("outcome", [ScanOutcome.RESOLVER_UNAVAILABLE, ScanOutcome.RESOLVER_ERROR,
+                                     ScanOutcome.DATABASE_ERROR, ScanOutcome.INVALID_INPUT,
+                                     ScanOutcome.RECORDED, ScanOutcome.DUPLICATE])
+def test_no_other_outcome_offers_manual_fallback(outcome):
+    assert present(_result(outcome), BOGOTA).offers_manual_fallback is False
+
+
+def test_manual_recorded_shows_success_with_manual_entry_badge():
+    manual = ScanResult(outcome=ScanOutcome.RECORDED, scanned_at=T0, hibob_id="99999",
+                        display_name="Test Employee", employee=TEST_EMPLOYEE, event_id=7,
+                        entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK)
+    view = present(manual, BOGOTA)
+    assert view.tone == "success" and view.title == "Scan registered"
+    assert view.badge == "Manual entry"
+    assert present(_result(ScanOutcome.RECORDED), BOGOTA).badge is None
+
+
+def test_fallback_expired_view():
+    view = present(ScanResult(outcome=ScanOutcome.FALLBACK_EXPIRED, scanned_at=T0), BOGOTA)
+    assert view.tone == "warning" and view.recorded is False and view.title == "Manual entry expired"
+
+
+@pytest.mark.parametrize(("status", "inline", "reference"), [
+    (ManualLookupStatus.INVALID_INPUT, "Enter a valid HiBob ID (numbers only).", None),
+    (ManualLookupStatus.EMPLOYEE_NOT_FOUND, "Employee not found. No scan was recorded.", None),
+    (ManualLookupStatus.DATA_INTEGRITY_ERROR, None, "E03"),
+    (ManualLookupStatus.DATABASE_ERROR, None, "E04"),
+])
+def test_manual_lookup_messages(status, inline, reference):
+    view = present_manual_lookup(status)
+    assert view.inline_message == inline
+    assert (view.result_view.reference if view.result_view else None) == reference
+
+
+def test_manual_lookup_expired_and_found():
+    assert present_manual_lookup(ManualLookupStatus.FALLBACK_EXPIRED).result_view.title == "Manual entry expired"
+    found = present_manual_lookup(ManualLookupStatus.FOUND)
+    assert found.inline_message is None and found.result_view is None
 
 
 @pytest.mark.parametrize(

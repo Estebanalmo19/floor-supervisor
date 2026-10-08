@@ -35,7 +35,9 @@ INSERT INTO floor_supervisor.scan_event (
     employment_status,
     lifecycle_status,
     device_id,
-    scanned_at
+    scanned_at,
+    entry_method,
+    fallback_reason
 ) VALUES (
     %(hibob_id)s,
     %(card_resolver_employee_name)s,
@@ -48,7 +50,9 @@ INSERT INTO floor_supervisor.scan_event (
     %(employment_status)s,
     %(lifecycle_status)s,
     %(device_id)s,
-    %(scanned_at)s
+    %(scanned_at)s,
+    %(entry_method)s,
+    %(fallback_reason)s
 )
 RETURNING id
 """
@@ -121,4 +125,6 @@ def _insert_params(event: NewScanEvent) -> dict[str, object]:
         "lifecycle_status": employee.lifecycle_status if employee else None,
         "device_id": event.device_id,
         "scanned_at": event.scanned_at,
+        "entry_method": event.entry_method.value,
+        "fallback_reason": event.fallback_reason.value if event.fallback_reason else None,
     }
