@@ -46,7 +46,8 @@ class FakeClock:
 @dataclass
 class FakeResolver:
     """Card Resolver stand-in. update_card() adds a mapping that resolve() then honours,
-    like the real service (registered cards resolve before ``error`` applies)."""
+    like the real service: registered cards resolve before ``error`` applies, with
+    name=None (their HiBob ID is not in the active dataset)."""
 
     resolution: CardResolution | None = RESOLUTION
     error: Exception | None = None
@@ -59,7 +60,7 @@ class FakeResolver:
     def resolve(self, raw: str) -> CardResolution:
         self.calls.append(raw)
         if raw in self.registered:
-            return CardResolution(self.registered[raw], "Test Employee", 99)
+            return CardResolution(self.registered[raw], None, 99)
         if self.error:
             raise self.error
         assert self.resolution is not None

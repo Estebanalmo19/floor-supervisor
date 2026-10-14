@@ -53,7 +53,8 @@ class CardResolution:
     """Successful Card Resolver answer (only the fields Floor Supervisor uses)."""
 
     hibob_id: str
-    employee_name: str
+    # None only for a manually mapped card whose HiBob ID is not in the active dataset.
+    employee_name: str | None
     dataset_id: int
 
 
@@ -104,11 +105,11 @@ class NewScanEvent:
             raise ValueError("scanned_at must be timezone-aware")
         if (self.hibob_lookup_status is HibobLookupStatus.FOUND) != (self.employee is not None):
             raise ValueError("employee must be present if and only if lookup status is FOUND")
-        # Mirrors scan_event_entry_method_consistency_chk (migration 002).
+        # Mirrors scan_event_entry_method_consistency_chk (migration 003). A CARD event may
+        # lack the Card Resolver name (manually mapped card outside the active dataset).
         if self.entry_method is EntryMethod.CARD:
-            if (self.fallback_reason is not None or self.card_resolver_employee_name is None
-                    or self.card_resolver_dataset_id is None):
-                raise ValueError("CARD events need Card Resolver data and no fallback reason")
+            if self.fallback_reason is not None or self.card_resolver_dataset_id is None:
+                raise ValueError("CARD events need a Card Resolver dataset and no fallback reason")
         else:
             if (self.fallback_reason is not FallbackReason.CARD_NOT_RESOLVED
                     or self.card_resolver_employee_name is not None

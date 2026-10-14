@@ -158,7 +158,8 @@ class ScanService:
         employee = lookup.employee
         if employee is not None:
             base["display_name"] = employee.employee_name
-            base["name_matches_resolver"] = names_match(employee, resolution.employee_name)
+            if resolution.employee_name is not None:
+                base["name_matches_resolver"] = names_match(employee, resolution.employee_name)
 
         # 3. Persist (duplicate-safe), then mirror
         event = NewScanEvent(

@@ -260,3 +260,25 @@ def test_update_errors_never_leak_card_or_credentials(caplog, status):
     for secret in (RAW, UPDATE_PASSWORD, TOKEN):
         assert secret not in str(exc_info.value) and secret not in caplog.text
     assert UPDATE_PASSWORD not in repr(client)
+
+
+
+# --- manual mappings without a dataset name (Card Resolver source=manual_mapping) ---------
+
+
+def test_manual_mapping_with_null_name_resolves_without_name():
+    body = {**OK_BODY, "employee": {"hibob_id": "43052", "name": None}, "source": "manual_mapping"}
+    resolution = _client(_respond(200, body)).resolve(RAW)
+    assert resolution.hibob_id == "43052" and resolution.employee_name is None
+    assert resolution.dataset_id == 99
+
+
+@pytest.mark.parametrize("body_change", [
+    {"employee": {"hibob_id": "43052", "name": None}},                                # no source
+    {"employee": {"hibob_id": "43052", "name": None}, "source": "dataset"},           # other source
+    {"employee": {"hibob_id": "43052", "name": "  "}, "source": "manual_mapping"},    # blank name
+    {"employee": {"hibob_id": "43052", "name": None}, "source": "manual_mapping", "dataset_id": None},
+])
+def test_null_name_is_only_accepted_for_manual_mappings_with_a_dataset(body_change):
+    with pytest.raises(CardResolverResponseError):
+        _client(_respond(200, {**OK_BODY, **body_change})).resolve(RAW)

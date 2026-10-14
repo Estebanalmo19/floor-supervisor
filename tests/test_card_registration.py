@@ -285,6 +285,10 @@ def test_registered_card_then_resolves_through_normal_card_flow():
     assert result.entry_method is EntryMethod.CARD and result.card_registered is False
     second = scans.events[-1]
     assert second.entry_method is EntryMethod.CARD and second.fallback_reason is None
+    # Card Resolver has no name for this mapping; HiBob supplies it (migration 003).
+    assert second.card_resolver_employee_name is None and second.card_resolver_dataset_id == 99
+    assert second.employee == TEST_EMPLOYEE and result.display_name == "Test Employee"
+    assert result.name_matches_resolver is None
     assert len(resolver.updates) == 1  # no re-registration on the normal route
     payload = build_scan_payload(second, 2, ZoneInfo("America/Bogota"))
     assert payload["entry_method"] == "CARD" and payload["fallback_reason"] is None
@@ -295,3 +299,66 @@ def test_normal_card_flow_never_calls_update():
     result = service.process_scan(RAW)
     assert result.outcome is ScanOutcome.RECORDED and result.entry_method is EntryMethod.CARD
     assert resolver.updates == [] and len(scans.events) == 1 and len(mirror.sent) == 1
+
+
+# --- migration 003: CARD resolution without a Card Resolver name ----------------------------
+
+
+def test_card_event_without_resolver_name_is_valid_but_needs_dataset():
+    from src.models.scan import HibobLookupStatus, NewScanEvent
+    from tests.test_scan_service import DEVICE, T0
+
+    event = NewScanEvent(hibob_id="99999", hibob_lookup_status=HibobLookupStatus.FOUND,
+                         employee=TEST_EMPLOYEE, device_id=DEVICE, scanned_at=T0,
+                         card_resolver_employee_name=None, card_resolver_dataset_id=99)
+    assert event.display_name == "Test Employee"
+    with pytest.raises(ValueError):
+        NewScanEvent(hibob_id="99999", hibob_lookup_status=HibobLookupStatus.FOUND,
+                     employee=TEST_EMPLOYEE, device_id=DEVICE, scanned_at=T0,
+                     card_resolver_employee_name=None, card_resolver_dataset_id=None)
+
+
+def test_nameless_card_scan_persists_null_resolver_name_and_mirrors_hibob_name():
+    from src.models.scan import CardResolution
+
+    resolver = FakeResolver(resolution=CardResolution("99999", None, 99))
+    service, _, scans, mirror = _setup(resolver=resolver)
+    result = service.process_scan(RAW)
+    assert result.outcome is ScanOutcome.RECORDED and result.entry_method is EntryMethod.CARD
+    (event,) = scans.events
+
+    db = FakeDatabase(responder=lambda sql, params: [(1,)] if sql == INSERT_SCAN_SQL else [])
+    ScanRepository(db.connection).record_if_not_duplicate(event, 2)
+    insert = next(s for s in db.executed if s.sql == INSERT_SCAN_SQL)
+    assert insert.params["card_resolver_employee_name"] is None
+    assert insert.params["employee_name"] == "Test Employee"
+
+    ((mirrored, event_id),) = mirror.sent
+    payload = build_scan_payload(mirrored, event_id, ZoneInfo("America/Bogota"))
+    assert payload["employee_name"] == "Test Employee" and payload["entry_method"] == "CARD"
+
+
+def test_nameless_card_scan_without_hibob_row_is_still_recorded():
+    from src.models.scan import CardResolution, ScanWarning
+
+    service, _, scans, _ = _setup(resolver=FakeResolver(resolution=CardResolution("99999", None, 99)),
+                                  employees=FakeEmployeeRepository(employee=None))
+    result = service.process_scan(RAW)
+    assert result.outcome is ScanOutcome.RECORDED and result.warnings == (ScanWarning.HIBOB_NOT_FOUND,)
+    assert scans.events[0].card_resolver_employee_name is None
+
+
+def test_migration_003_only_relaxes_the_card_name_condition():
+    from pathlib import Path
+
+    sql = (Path(__file__).resolve().parents[1] / "sql" /
+           "003_allow_resolved_card_without_resolver_name.sql").read_text(encoding="utf-8")
+    body = chr(10).join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+    card_branch = body.split("entry_method = 'CARD'")[1].split("OR (")[0]
+    assert "card_resolver_employee_name" not in card_branch
+    assert "card_resolver_dataset_id IS NOT NULL" in card_branch and "fallback_reason IS NULL" in card_branch
+    manual_branch = body.split("entry_method = 'MANUAL_HIBOB_FALLBACK'")[1]
+    for condition in ("fallback_reason = 'CARD_NOT_RESOLVED'", "card_resolver_employee_name IS NULL",
+                      "card_resolver_dataset_id IS NULL", "hibob_lookup_status = 'FOUND'"):
+        assert condition in manual_branch
+    assert body.count("BEGIN;") == 1 and body.count("COMMIT;") == 1

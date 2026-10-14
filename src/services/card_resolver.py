@@ -1,11 +1,14 @@
 """HTTP client for the Card Resolver API.
 
-resolve() contract (verified for a known card):
+resolve() contract (verified against the Card Resolver source, 2026-10-14):
     POST <url>  {"raw": "<card value>"}   Authorization: Bearer <token>
     200 {"raw": ..., "decoder": {...}, "employee": {"hibob_id": "99999", "name": "..."}, "dataset_id": 99}
+    A card registered via /cards/update answers with "source": "manual_mapping"; its
+    "name" is null when the HiBob ID is not in the active import dataset. Only then is a
+    null name accepted (CardResolution.employee_name = None, see migration 003).
+    404 card not found, 409 ambiguous card, 422 undecodable, 503 no active dataset.
 
-Unknown-card semantics are NOT yet verified (the probe was rejected with 401). The
-mapping below is deliberately defensive:
+Mapping (deliberately defensive):
     200 with employee missing/null, 404, 400, 422  -> CardNotResolvedError
     408, 429, 5xx, timeout, connection error        -> CardResolverUnavailableError
     401, 403, other statuses, malformed body        -> CardResolverResponseError
@@ -14,9 +17,12 @@ update_card() contract (from the service's OpenAPI document, 2026-10-14):
     POST <.../cards/update>  {"card_number_raw": "<raw>", "hibob_id": "<id>", "overwrite": false}
     Authorization: HTTP Basic (realm "Card imports"); the resolve bearer token gets 401.
     card_number_raw: 1..20 chars. overwrite=false never takes a card from another owner.
-    Documented: 200 (body schema unspecified) and 422. Observed body:
-        {"status": "unchanged", "card_number_raw": ..., "decoder": {...}, "hibob_id": "..."}
-    "status" values are not enumerated by the API; it is treated as informational.
+    Auth: the admin credential or the dedicated CARD_UPDATE_USER credential (update only).
+    200 {"status": "created" | "updated" | "unchanged", "card_number_raw": ...,
+         "decoder": {...}, "hibob_id": "..."}   ("updated" needs overwrite=true: never sent)
+    409 card mapped to another HiBob ID, 422 invalid body / undecodable card,
+    401 bad credentials, 503 auth not configured, 403 cross-origin request.
+    "status" is informational.
     Success = 200/201 + JSON object whose hibob_id (and card_number_raw, if echoed)
     equal what was sent. Anything else is a failure:
         408, 429, 5xx, timeout, connection error  -> CardResolverUnavailableError
@@ -47,6 +53,8 @@ logger = logging.getLogger(__name__)
 _NOT_RESOLVED_STATUSES = frozenset({400, 404, 422})
 _UNAVAILABLE_STATUSES = frozenset({408, 429})
 _UPDATE_SUCCESS_STATUSES = frozenset({200, 201})
+# /cards/resolve "source" for cards registered through /cards/update.
+MANUAL_MAPPING_SOURCE = "manual_mapping"
 # CardMappingRequest.card_number_raw maxLength in the Card Resolver OpenAPI schema.
 CARD_NUMBER_RAW_MAX_LENGTH = 20
 
@@ -171,14 +179,18 @@ def _parse_resolution(body: Any, sent_raw: str) -> CardResolution:
         raise CardResolverResponseError("Card Resolver 'employee.hibob_id' is too long")
 
     name = employee.get("name")
-    if not isinstance(name, str) or not name.strip():
+    if name is None and body.get("source") == MANUAL_MAPPING_SOURCE:
+        resolved_name = None  # registered card whose HiBob ID is not in the active dataset
+    elif not isinstance(name, str) or not name.strip():
         raise CardResolverResponseError("Card Resolver 'employee.name' is missing")
+    else:
+        resolved_name = name.strip()
 
     dataset_id = body.get("dataset_id")
     if isinstance(dataset_id, bool) or not isinstance(dataset_id, int):
         raise CardResolverResponseError("Card Resolver 'dataset_id' is not an integer")
 
-    return CardResolution(hibob_id=hibob_id, employee_name=name.strip(), dataset_id=dataset_id)
+    return CardResolution(hibob_id=hibob_id, employee_name=resolved_name, dataset_id=dataset_id)
 
 
 def _parse_registration(body: Any, sent_raw: str, sent_hibob_id: str) -> CardRegistration:
