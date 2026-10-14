@@ -207,7 +207,30 @@ def test_manual_preview_shows_name_title_site_only():
         assert hidden not in html
 
 
+def test_manual_preview_copy_and_inline_error():
+    from src.ui.components import manual_preview_html
+
+    html = manual_preview_html(TEST_EMPLOYEE_FOR_PREVIEW)
+    assert "This card will be linked to this employee." in html and "fs-inline-message" not in html
+    failed = manual_preview_html(TEST_EMPLOYEE_FOR_PREVIEW, "Card could not be registered. Please try again.")
+    assert 'class="fs-inline-message"' in failed and "Card could not be registered" in failed
+
+
+def test_checklist_replaces_title_on_registration_result():
+    view = ResultView(tone="success", icon="check", title="Scan registered", recorded=True,
+                      employee_name="Test Employee", checklist=("Card registered", "Scan registered"))
+    html = stage_html(view, ttl_seconds=3, sequence=1)
+    assert "fs-checklist" in html
+    assert "✓ Card registered" in html and "✓ Scan registered" in html
+
+
 def test_manual_entry_badge_rendered_on_result():
     view = ResultView(tone="success", icon="check", title="Scan registered", recorded=True,
                       employee_name="Test Employee", badge="Manual entry")
     assert '<span class="fs-badge">Manual entry</span>' in stage_html(view, ttl_seconds=3, sequence=1)
+
+
+from src.models.employee import Employee as _Employee  # noqa: E402
+
+TEST_EMPLOYEE_FOR_PREVIEW = _Employee("99999", "Test Employee", "Game Presenter", "Operations",
+                                      "Test Site", "Active", "Employed")

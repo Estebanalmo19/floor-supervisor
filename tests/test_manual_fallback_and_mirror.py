@@ -99,12 +99,12 @@ def test_successful_scan_never_issues_a_ticket():
     assert _service().process_scan(RAW).fallback_ticket is None
 
 
-@pytest.mark.parametrize("ticket", [None, "forged", FallbackTicket(issued_at=T0, device_id="OTHER_DEVICE")])
+@pytest.mark.parametrize("ticket", [None, "forged", FallbackTicket(issued_at=T0, device_id="OTHER_DEVICE", card_raw=RAW)])
 def test_manual_fallback_cannot_be_used_without_a_valid_ticket(ticket):
     employees, scans = FakeEmployeeRepository(), InMemoryScanRepository()
     service = _service(employees=employees, scans=scans)
     assert service.lookup_manual(ticket, "99999").status is ManualLookupStatus.FALLBACK_EXPIRED
-    assert service.confirm_manual(ticket, TEST_EMPLOYEE).outcome is ScanOutcome.FALLBACK_EXPIRED
+    assert service.register_card_and_confirm(ticket, TEST_EMPLOYEE).outcome is ScanOutcome.FALLBACK_EXPIRED
     assert employees.calls == [] and scans.events == []
 
 
@@ -114,7 +114,7 @@ def test_expired_ticket_is_rejected():
     ticket = _not_resolved_ticket(service)
     clock.advance(FALLBACK_TICKET_TTL.total_seconds())
     assert service.lookup_manual(ticket, "99999").status is ManualLookupStatus.FALLBACK_EXPIRED
-    assert service.confirm_manual(ticket, TEST_EMPLOYEE).outcome is ScanOutcome.FALLBACK_EXPIRED
+    assert service.register_card_and_confirm(ticket, TEST_EMPLOYEE).outcome is ScanOutcome.FALLBACK_EXPIRED
     assert scans.events == []
 
 
@@ -157,7 +157,7 @@ def test_manual_lookup_errors_do_not_write(error, status):
     assert scans.events == []
 
 
-# --- Confirm scan ----------------------------------------------------------------------
+# --- Register card & check in ----------------------------------------------------------------------
 
 
 def test_confirm_creates_manual_event_and_mirrors_it():
@@ -165,7 +165,7 @@ def test_confirm_creates_manual_event_and_mirrors_it():
     service = _fallback_service(scans=scans, mirror=mirror)
     ticket = _not_resolved_ticket(service)
     employee = service.lookup_manual(ticket, "99999").employee
-    result = service.confirm_manual(ticket, employee)
+    result = service.register_card_and_confirm(ticket, employee)
 
     assert result.outcome is ScanOutcome.RECORDED and result.event_id == 1
     assert result.entry_method is EntryMethod.MANUAL_HIBOB_FALLBACK
@@ -183,7 +183,7 @@ def test_duplicate_detection_spans_card_and_manual():
 
     clock.advance(1.0)  # same employee + device inside the 2 s window, via manual fallback
     manual = _fallback_service(clock=clock, scans=scans)
-    result = manual.confirm_manual(FallbackTicket(issued_at=clock.now, device_id=DEVICE), TEST_EMPLOYEE)
+    result = manual.register_card_and_confirm(FallbackTicket(issued_at=clock.now, device_id=DEVICE, card_raw=RAW), TEST_EMPLOYEE)
     assert result.outcome is ScanOutcome.DUPLICATE and result.event_id == 1
     assert len(scans.events) == 1
 
@@ -192,9 +192,9 @@ def test_manual_confirm_logs_entry_method(caplog):
     caplog.set_level(logging.DEBUG, logger="src")
     service = _fallback_service()
     ticket = _not_resolved_ticket(service)
-    service.confirm_manual(ticket, TEST_EMPLOYEE)
+    service.register_card_and_confirm(ticket, TEST_EMPLOYEE)
     records = [r for r in caplog.records if r.getMessage() == "scan_processed"]
-    assert records[-1].entry_method == "MANUAL_HIBOB_FALLBACK" and records[-1].card is None
+    assert records[-1].entry_method == "MANUAL_HIBOB_FALLBACK" and records[-1].card == "****5678"
 
 
 # --- Power Automate mirror ---------------------------------------------------------------

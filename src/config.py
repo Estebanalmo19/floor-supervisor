@@ -17,6 +17,15 @@ DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MAX_DUPLICATE_WINDOW_SECONDS = 60
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 _SSL_MODES = {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+_RESOLVE_PATH = "/cards/resolve"
+_UPDATE_PATH = "/cards/update"
+
+
+def derive_update_url(resolve_url: str) -> str | None:
+    """/cards/update lives next to /cards/resolve on the same Card Resolver API."""
+    if not resolve_url.endswith(_RESOLVE_PATH):
+        return None
+    return resolve_url[: -len(_RESOLVE_PATH)] + _UPDATE_PATH
 
 
 @dataclass(frozen=True)
@@ -36,6 +45,15 @@ class CardResolverSettings:
     url: str
     bearer_token: str = field(repr=False)
     timeout_seconds: float
+    # /cards/update uses HTTP Basic (not the bearer token). Unset credentials disable
+    # card registration from the manual fallback.
+    update_url: str | None = None
+    update_username: str | None = None
+    update_password: str | None = field(default=None, repr=False)
+
+    @property
+    def registration_enabled(self) -> bool:
+        return bool(self.update_url and self.update_username and self.update_password)
 
 
 @dataclass(frozen=True)
@@ -93,12 +111,27 @@ def load_settings(
             "DB_STATEMENT_TIMEOUT_MS", default=5000, minimum=100, maximum=60000
         ),
     )
+    resolver_url = reader.url("CARD_RESOLVER_URL")
+    update_username = reader.optional_value("CARD_RESOLVER_UPDATE_USERNAME")
+    update_password = reader.optional_value("CARD_RESOLVER_UPDATE_PASSWORD", secret=True)
+    update_url = None
+    if (update_username is None) != (update_password is None):
+        reader.errors.append(
+            "CARD_RESOLVER_UPDATE_USERNAME and CARD_RESOLVER_UPDATE_PASSWORD must be set together")
+    elif update_username is not None:
+        update_url = derive_update_url(resolver_url)
+        if update_url is None:
+            reader.errors.append(
+                f"CARD_RESOLVER_URL must end with {_RESOLVE_PATH} to enable card registration")
     card_resolver = CardResolverSettings(
-        url=reader.url("CARD_RESOLVER_URL"),
+        url=resolver_url,
         bearer_token=reader.required("CARD_RESOLVER_BEARER_TOKEN", secret=True),
         timeout_seconds=reader.number(
             "CARD_RESOLVER_TIMEOUT_SECONDS", default=5.0, minimum=0.5, maximum=30.0
         ),
+        update_url=update_url,
+        update_username=update_username,
+        update_password=update_password,
     )
     power_automate = PowerAutomateSettings(
         url=reader.optional_secret_url("POWER_AUTOMATE_URL"),
@@ -143,6 +176,12 @@ class _EnvReader:
 
     def optional(self, key: str, default: str) -> str:
         return self._get(key) or default
+
+    def optional_value(self, key: str, secret: bool = False) -> str | None:
+        value = self._get(key)
+        if value is not None and secret and value.startswith("<") and value.endswith(">"):
+            self.errors.append(f"{key} still contains a placeholder value")
+        return value
 
     def required(self, key: str, secret: bool = False) -> str:
         value = self._get(key)

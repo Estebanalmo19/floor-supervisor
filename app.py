@@ -7,7 +7,12 @@ in src/ui/components.py; styling in src/ui/kiosk.css.
 Screens:
   scan            default card scanner (unchanged behaviour)
   manual_entry    HiBob ID entry   - only reachable after CARD_NOT_RESOLVED
-  manual_preview  employee preview - "Confirm scan" is the only action that records
+  manual_preview  employee preview - "Register card & check in" is the only action that
+                  writes: it links the card in Card Resolver, then records the scan
+
+The raw value of an unrecognized card lives only inside the FallbackTicket in
+server-side session state. It is dropped on success, cancel, expiry, a new scan or
+when the offer lapses, and is never rendered.
 
 Run:  streamlit run app.py
 """
@@ -36,6 +41,7 @@ from src.ui.components import (
 )
 from src.ui.focus import render_autofocus
 from src.ui.presenter import (
+    CARD_REGISTRATION_FAILED_MESSAGE,
     DEFAULT_TIMINGS,
     FALLBACK_EXPIRED_VIEW,
     UNEXPECTED_ERROR_VIEW,
@@ -64,7 +70,7 @@ MANUAL_INPUT_KEY_PREFIX = "manual_hibob_id"
 MANUAL_INPUT_GENERATION_KEY = "manual_input_generation"
 MANUAL_INPUT_LABEL = "HiBob ID"
 MODE_SCAN, MODE_MANUAL_ENTRY, MODE_MANUAL_PREVIEW = "scan", "manual_entry", "manual_preview"
-# How long the "Enter HiBob ID manually" offer stays visible after CARD_NOT_RESOLVED.
+# How long the "Enter HiBob ID" offer stays visible after CARD_NOT_RESOLVED.
 FALLBACK_OFFER_SECONDS = 20
 
 logger = logging.getLogger("src.app")
@@ -101,13 +107,23 @@ def show_result(view: ResultView) -> None:
     st.session_state[RESULT_STATE_KEY] = (view, time.monotonic(), sequence)
 
 
-def back_to_scanner(clear_ticket: bool = True) -> None:
+def clear_fallback() -> None:
+    """Drop the ticket (and with it the raw card value) and the offer."""
+    st.session_state.pop(FALLBACK_TICKET_KEY, None)
+    st.session_state.pop(FALLBACK_OFFER_KEY, None)
+
+
+def back_to_scanner() -> None:
     st.session_state[MODE_KEY] = MODE_SCAN
     st.session_state.pop(MANUAL_EMPLOYEE_KEY, None)
     st.session_state.pop(MANUAL_MESSAGE_KEY, None)
-    if clear_ticket:
-        st.session_state.pop(FALLBACK_TICKET_KEY, None)
-        st.session_state.pop(FALLBACK_OFFER_KEY, None)
+    clear_fallback()
+
+
+def _offer_seconds_left() -> float:
+    offered_at, _ = st.session_state.get(FALLBACK_OFFER_KEY, (0.0, 0))
+    return min(_ticket_seconds_left(_ticket()),
+               FALLBACK_OFFER_SECONDS - (time.monotonic() - offered_at))
 
 
 def current_result() -> tuple[ResultView | None, float, int]:
@@ -155,10 +171,10 @@ def on_scan(context: AppContext, input_key: str) -> None:
             previous_sequence = st.session_state.get(FALLBACK_OFFER_KEY, (0.0, 0))[1]
             st.session_state[FALLBACK_OFFER_KEY] = (time.monotonic(), previous_sequence + 1)
         else:
-            st.session_state.pop(FALLBACK_TICKET_KEY, None)
+            clear_fallback()
     except Exception:  # last-resort guard: the kiosk must never show a traceback
         logger.exception("scan_unexpected_error")
-        st.session_state.pop(FALLBACK_TICKET_KEY, None)
+        clear_fallback()
         view = UNEXPECTED_ERROR_VIEW
     show_result(view)
 
@@ -197,22 +213,31 @@ def on_find_employee(context: AppContext, input_key: str) -> None:
         _rotate(MANUAL_INPUT_GENERATION_KEY)
 
 
-def on_confirm_manual(context: AppContext) -> None:
+def on_register_card(context: AppContext) -> None:
     if st.session_state.get(MODE_KEY) != MODE_MANUAL_PREVIEW:
         return
     employee = st.session_state.get(MANUAL_EMPLOYEE_KEY)
-    ticket = st.session_state.pop(FALLBACK_TICKET_KEY, None)  # single use: a double tap cannot re-record
-    back_to_scanner()
-    if employee is None:
+    # Taken out while the request runs: a double tap cannot register/record twice.
+    ticket = st.session_state.pop(FALLBACK_TICKET_KEY, None)
+    if employee is None or not isinstance(ticket, FallbackTicket):
+        back_to_scanner()
         show_result(FALLBACK_EXPIRED_VIEW)
         return
     try:
-        result = context.scan_service.confirm_manual(ticket, employee)
-        view = present(result, context.settings.timezone)
+        result = context.scan_service.register_card_and_confirm(ticket, employee)
     except Exception:
-        logger.exception("manual_confirm_unexpected_error")
-        view = UNEXPECTED_ERROR_VIEW
-    show_result(view)
+        logger.exception("card_registration_unexpected_error")
+        back_to_scanner()
+        show_result(UNEXPECTED_ERROR_VIEW)
+        return
+    if result.outcome is ScanOutcome.CARD_REGISTRATION_FAILED:
+        # Nothing was recorded. Stay on the preview so the employee can retry while
+        # the ticket is still valid (manual_timeout_watch handles expiry).
+        st.session_state[FALLBACK_TICKET_KEY] = ticket
+        st.session_state[MANUAL_MESSAGE_KEY] = CARD_REGISTRATION_FAILED_MESSAGE
+        return
+    back_to_scanner()  # drops the ticket and the raw card value
+    show_result(present(result, context.settings.timezone))
 
 
 def on_cancel_manual() -> None:
@@ -238,19 +263,20 @@ def render_scan_screen(context: AppContext) -> None:
     )
 
     ticket = _ticket()
-    offered_at, offer_sequence = st.session_state.get(FALLBACK_OFFER_KEY, (0.0, 0))
-    offer_left = min(_ticket_seconds_left(ticket),
-                     FALLBACK_OFFER_SECONDS - (time.monotonic() - offered_at))
+    _, offer_sequence = st.session_state.get(FALLBACK_OFFER_KEY, (0.0, 0))
+    offer_left = _offer_seconds_left()
     if ticket is not None and offer_left > 0:
         # Hide the offer client-side when it lapses (same mechanism as result expiry).
         expiry = "fs-expire-a" if offer_sequence % 2 else "fs-expire-b"
         st.html(f"<style>.st-key-fs_btn_fallback {{ animation: {expiry} 0.2s ease-in forwards; "
                 f"animation-delay: {offer_left:.2f}s; }}</style>")
-        st.button("Enter HiBob ID manually", key="fs_btn_fallback", on_click=on_open_manual,
+        st.button("Enter HiBob ID", key="fs_btn_fallback", on_click=on_open_manual,
                   type="secondary", width="stretch")
 
     st.html(system_status_html(context.settings.device_id))
     render_autofocus(SCAN_INPUT_LABEL)
+    if ticket is not None:
+        manual_timeout_watch()
 
 
 def render_manual_entry_screen(context: AppContext) -> None:
@@ -276,11 +302,11 @@ def render_manual_preview_screen(context: AppContext) -> None:
     if employee is None:
         back_to_scanner()
         st.rerun()
-    st.html(manual_preview_html(employee))
+    st.html(manual_preview_html(employee, st.session_state.get(MANUAL_MESSAGE_KEY)))
     confirm_col, cancel_col = st.columns(2)
     with confirm_col:
-        st.button("Confirm scan", key="fs_btn_confirm", type="primary",
-                  on_click=on_confirm_manual, args=(context,), width="stretch")
+        st.button("Register card & check in", key="fs_btn_register", type="primary",
+                  on_click=on_register_card, args=(context,), width="stretch")
     with cancel_col:
         st.button("Cancel", key="fs_btn_cancel_preview", type="secondary",
                   on_click=on_cancel_manual, width="stretch")
@@ -289,8 +315,14 @@ def render_manual_preview_screen(context: AppContext) -> None:
 
 @st.fragment(run_every=5)
 def manual_timeout_watch() -> None:
-    """Return an abandoned manual screen to the scanner once the fallback window lapses."""
+    """Drop fallback state once it lapses.
+
+    Scanner screen: when the offer expires, forget the ticket and its raw card value.
+    Manual screens: return an abandoned screen to the scanner once the ticket expires.
+    """
     if st.session_state.get(MODE_KEY, MODE_SCAN) == MODE_SCAN:
+        if _ticket() is not None and _offer_seconds_left() <= 0:
+            clear_fallback()  # the button is already hidden client-side; no rerun needed
         return
     if _ticket_seconds_left(_ticket()) <= 0:
         back_to_scanner()
@@ -314,6 +346,8 @@ def main() -> None:
         st.stop()
 
     mode = st.session_state.get(MODE_KEY, MODE_SCAN)
+    if mode == MODE_SCAN and _ticket() is not None and _offer_seconds_left() <= 0:
+        clear_fallback()  # lapsed offer: never keep the raw card around
     if mode == MODE_MANUAL_ENTRY and _ticket() is not None:
         render_manual_entry_screen(context)
     elif mode == MODE_MANUAL_PREVIEW and _ticket() is not None:

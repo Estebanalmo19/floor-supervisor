@@ -53,6 +53,7 @@ class ResultView:
     reference: str | None = None
     badge: str | None = None               # e.g. "Manual entry"
     offers_manual_fallback: bool = False   # only CARD_NOT_RESOLVED
+    checklist: tuple[str, ...] = ()        # e.g. ("Card registered", "Scan registered")
 
 
 # --- copy ----------------------------------------------------------------------
@@ -63,7 +64,16 @@ HIBOB_NOT_FOUND_MESSAGE = (
 )
 DUPLICATE_MESSAGE = "This card was scanned moments ago. No additional record was created."
 DUPLICATE_MANUAL_MESSAGE = "This employee was registered moments ago. No additional record was created."
-CARD_NOT_RECOGNIZED_MESSAGE = "Try scanning the card again or enter the employee HiBob ID."
+CARD_NOT_RECOGNIZED_MESSAGE = "This card is not registered yet. Enter your HiBob ID to register this card."
+CARD_NOT_RECOGNIZED_NO_FALLBACK_MESSAGE = (
+    "This card is not registered yet. Please contact your supervisor."
+)
+CARD_REGISTRATION_FAILED_MESSAGE = "Card could not be registered. Please try again."
+CARD_REGISTERED = "Card registered"
+SCAN_REGISTERED = "Scan registered"
+DUPLICATE_AFTER_REGISTRATION_MESSAGE = (
+    "Card registered. This employee was registered moments ago. No additional record was created."
+)
 MANUAL_ENTRY_BADGE = "Manual entry"
 FALLBACK_EXPIRED_TITLE = "Manual entry expired"
 FALLBACK_EXPIRED_MESSAGE = "No scan was recorded. Please scan your card again."
@@ -82,6 +92,7 @@ _ERROR_REFERENCES: dict[ScanOutcome, str] = {
     ScanOutcome.RESOLVER_ERROR: "E02",
     ScanOutcome.DATA_INTEGRITY_ERROR: "E03",
     ScanOutcome.DATABASE_ERROR: "E04",
+    ScanOutcome.CARD_REGISTRATION_FAILED: "E05",
 }
 UNEXPECTED_ERROR_REFERENCE = "E99"
 
@@ -116,7 +127,8 @@ def present(
             icon="cross",
             title="Card not recognized",
             recorded=False,
-            message=CARD_NOT_RECOGNIZED_MESSAGE,
+            message=(CARD_NOT_RECOGNIZED_MESSAGE if result.fallback_ticket is not None
+                     else CARD_NOT_RECOGNIZED_NO_FALLBACK_MESSAGE),
             offers_manual_fallback=result.fallback_ticket is not None,
         )
     if outcome is ScanOutcome.FALLBACK_EXPIRED:
@@ -137,7 +149,8 @@ def present(
     time_label = f"{local_time} · {time_zone_label}"
     details = _employee_details(result)
     manual = result.entry_method is EntryMethod.MANUAL_HIBOB_FALLBACK
-    badge = MANUAL_ENTRY_BADGE if manual else None
+    # A freshly registered card says so explicitly instead of the generic manual badge.
+    badge = MANUAL_ENTRY_BADGE if manual and not result.card_registered else None
 
     if outcome is ScanOutcome.DUPLICATE:
         return ResultView(
@@ -148,7 +161,8 @@ def present(
             employee_name=result.display_name,
             details=details,
             time_label=time_label,
-            message=DUPLICATE_MANUAL_MESSAGE if manual else DUPLICATE_MESSAGE,
+            message=(DUPLICATE_AFTER_REGISTRATION_MESSAGE if result.card_registered
+                     else DUPLICATE_MANUAL_MESSAGE if manual else DUPLICATE_MESSAGE),
             badge=badge,
         )
 
@@ -163,13 +177,14 @@ def present(
     return ResultView(
         tone=tone,
         icon="check",
-        title="Scan registered",
+        title=SCAN_REGISTERED,
         recorded=True,
         employee_name=result.display_name,
         details=details,
         time_label=time_label,
         message=message,
         badge=badge,
+        checklist=(CARD_REGISTERED, SCAN_REGISTERED) if result.card_registered else (),
     )
 
 

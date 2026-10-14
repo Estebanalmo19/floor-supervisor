@@ -118,7 +118,7 @@ def test_unexpected_service_error_shows_generic_message(fake_service):
     assert "internal detail" not in html and "10.0.0.5" not in html
 
 
-# --- manual HiBob fallback (AppTest) -------------------------------------------------------
+# --- manual HiBob fallback: register card & check in (AppTest) ------------------------------
 
 from src.models.scan import (  # noqa: E402
     EntryMethod,
@@ -127,22 +127,26 @@ from src.models.scan import (  # noqa: E402
     ManualLookupStatus,
 )
 
+UNKNOWN_RAW = "000000098765"
+
 
 class FakeFallbackService(FakeScanService):
-    """process_scan -> CARD_NOT_RESOLVED with a ticket; scripted manual lookup/confirm."""
+    """process_scan -> CARD_NOT_RESOLVED with a ticket; scripted manual lookup/registration."""
 
     def __init__(self, lookup_status=ManualLookupStatus.FOUND):
         super().__init__(outcome=ScanOutcome.CARD_NOT_RESOLVED)
         self.lookup_status = lookup_status
         self.lookups: list[str] = []
-        self.confirms: list[str] = []
+        self.registrations: list[tuple[str, str]] = []  # (card_raw, hibob_id)
+        self.registration_outcome = ScanOutcome.RECORDED
 
     def process_scan(self, raw):
         self.calls.append(raw)
         if self.outcome is ScanOutcome.CARD_NOT_RESOLVED:
             return ScanResult(outcome=ScanOutcome.CARD_NOT_RESOLVED, scanned_at=T0,
                               fallback_ticket=FallbackTicket(issued_at=datetime.now(UTC),
-                                                             device_id="FLOOR_SUPERVISOR_TABLET_01"))
+                                                             device_id="FLOOR_SUPERVISOR_TABLET_01",
+                                                             card_raw=raw))
         return super().process_scan(raw)
 
     def lookup_manual(self, ticket, hibob_id):
@@ -151,12 +155,16 @@ class FakeFallbackService(FakeScanService):
         employee = TEST_EMPLOYEE if self.lookup_status is ManualLookupStatus.FOUND else None
         return ManualLookupResult(status=self.lookup_status, employee=employee)
 
-    def confirm_manual(self, ticket, employee):
+    def register_card_and_confirm(self, ticket, employee):
         assert isinstance(ticket, FallbackTicket)
-        self.confirms.append(employee.employee_id)
-        return ScanResult(outcome=ScanOutcome.RECORDED, scanned_at=T0, hibob_id=employee.employee_id,
+        self.registrations.append((ticket.card_raw, employee.employee_id))
+        if self.registration_outcome is ScanOutcome.CARD_REGISTRATION_FAILED:
+            return ScanResult(outcome=ScanOutcome.CARD_REGISTRATION_FAILED, scanned_at=T0,
+                              hibob_id=employee.employee_id, display_name=employee.employee_name,
+                              entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK)
+        return ScanResult(outcome=self.registration_outcome, scanned_at=T0, hibob_id=employee.employee_id,
                           display_name=employee.employee_name, employee=employee, event_id=77,
-                          entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK)
+                          entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK, card_registered=True)
 
 
 @pytest.fixture
@@ -182,6 +190,26 @@ def _markup(at):
     return " ".join(e.proto.body for e in at.get("html") if not e.proto.body.startswith("<style>"))
 
 
+def _all_rendered_text(at) -> str:
+    """Markup plus every widget label/value/placeholder the browser receives."""
+    parts = [_markup(at)]
+    for widget in list(at.text_input) + list(at.button):
+        parts += [str(getattr(widget, "label", "")), str(getattr(widget, "value", "")),
+                  str(getattr(widget.proto, "placeholder", ""))]
+    return " ".join(parts)
+
+
+def _ticket_in_session(at):
+    return at.session_state["fallback_ticket"] if "fallback_ticket" in at.session_state else None
+
+
+def _to_preview(at):
+    at = _scan(at, UNKNOWN_RAW)
+    at = _button(at, "fs_btn_fallback").click().run()
+    at.text_input[0].input("99999")
+    return _button(at, "fs_btn_find").click().run()
+
+
 def test_manual_fallback_not_offered_on_normal_screen(fake_service):
     at = AppTest.from_file(APP_PATH, default_timeout=10).run()
     assert _button(at, "fs_btn_fallback") is None
@@ -190,66 +218,125 @@ def test_manual_fallback_not_offered_on_normal_screen(fake_service):
     assert "Enter HiBob ID" not in _markup(at)
 
 
-def test_card_not_resolved_offers_manual_fallback(fallback_service):
+def test_card_not_resolved_offers_registration(fallback_service):
     at = AppTest.from_file(APP_PATH, default_timeout=10).run()
-    at = _scan(at, "000000000001")
-    assert "Card not recognized" in _markup(at)
-    assert "Try scanning the card again or enter the employee HiBob ID." in _markup(at)
-    assert _button(at, "fs_btn_fallback").label == "Enter HiBob ID manually"
+    at = _scan(at, UNKNOWN_RAW)
+    html = _markup(at)
+    assert "Card not recognized" in html
+    assert "This card is not registered yet. Enter your HiBob ID to register this card." in html
+    assert _button(at, "fs_btn_fallback").label == "Enter HiBob ID"
 
 
-def test_full_manual_flow_confirm_records(fallback_service):
+def test_raw_card_is_kept_only_in_server_session_and_never_rendered(fallback_service):
+    """Requirements 1 & 2: the ticket in session state holds the raw card; no screen shows it."""
     at = AppTest.from_file(APP_PATH, default_timeout=10).run()
-    at = _scan(at, "000000000001")
+    at = _scan(at, UNKNOWN_RAW)
+    assert _ticket_in_session(at).card_raw == UNKNOWN_RAW
+    assert UNKNOWN_RAW not in _all_rendered_text(at)
+
     at = _button(at, "fs_btn_fallback").click().run()
-    assert "Enter HiBob ID" in _markup(at) and len(at.text_input) == 1  # scanner input not rendered
+    assert UNKNOWN_RAW not in _all_rendered_text(at)
+    at.text_input[0].input("99999")
+    at = _button(at, "fs_btn_find").click().run()
+    assert UNKNOWN_RAW not in _all_rendered_text(at)  # preview
+    at = _button(at, "fs_btn_register").click().run()
+    assert UNKNOWN_RAW not in _all_rendered_text(at)  # success
+
+
+def test_full_flow_preview_then_register_and_check_in(fallback_service):
+    at = AppTest.from_file(APP_PATH, default_timeout=10).run()
+    at = _scan(at, UNKNOWN_RAW)
+    at = _button(at, "fs_btn_fallback").click().run()
+    assert "HiBob ID" in _markup(at) and len(at.text_input) == 1  # scanner input not rendered
+    assert _button(at, "fs_btn_find").label == "Find employee"
 
     at.text_input[0].input("99999")
     at = _button(at, "fs_btn_find").click().run()
     preview = _markup(at)
-    assert fallback_service.lookups == ["99999"] and fallback_service.confirms == []  # preview never writes
-    for text in ("Test Employee", "Game Presenter", "Test Site"):
+    assert fallback_service.lookups == ["99999"]
+    assert fallback_service.registrations == []  # preview never registers or records
+    for text in ("Test Employee", "Game Presenter", "Test Site",
+                 "This card will be linked to this employee."):
         assert text in preview
     assert "Active" not in preview and "Employed" not in preview
+    assert _button(at, "fs_btn_register").label == "Register card & check in"
 
-    at = _button(at, "fs_btn_confirm").click().run()
+    at = _button(at, "fs_btn_register").click().run()
     html = _markup(at)
-    assert fallback_service.confirms == ["99999"]
-    assert "Scan registered" in html and "Manual entry" in html and "fs-tone-success" in html
+    assert fallback_service.registrations == [(UNKNOWN_RAW, "99999")]
+    assert "✓ Card registered" in html and "✓ Scan registered" in html and "fs-tone-success" in html
     assert len(at.text_input) == 1 and at.text_input[0].label == "Card scan"  # back to the scanner
-    assert _button(at, "fs_btn_fallback") is None  # ticket consumed
+    assert _ticket_in_session(at) is None  # raw card dropped after success
+    assert _button(at, "fs_btn_fallback") is None
+
+
+def test_registration_failure_stays_on_preview_and_allows_retry(fallback_service):
+    fallback_service.registration_outcome = ScanOutcome.CARD_REGISTRATION_FAILED
+    at = AppTest.from_file(APP_PATH, default_timeout=10).run()
+    at = _to_preview(at)
+    at = _button(at, "fs_btn_register").click().run()
+
+    html = _markup(at)
+    assert "Card could not be registered. Please try again." in html
+    assert "HTTP" not in html and "Card Resolver" not in html  # no internal details
+    assert _button(at, "fs_btn_register") is not None  # still on the preview
+    assert _ticket_in_session(at).card_raw == UNKNOWN_RAW  # kept for the retry only
+
+    fallback_service.registration_outcome = ScanOutcome.RECORDED
+    at = _button(at, "fs_btn_register").click().run()
+    assert fallback_service.registrations == [(UNKNOWN_RAW, "99999")] * 2
+    assert "✓ Card registered" in _markup(at) and _ticket_in_session(at) is None
 
 
 @pytest.mark.parametrize("cancel_key", ["fs_btn_cancel_entry", "fs_btn_cancel_preview"])
-def test_cancel_does_not_write(fallback_service, cancel_key):
+def test_cancel_clears_fallback_and_card_without_writing(fallback_service, cancel_key):
     at = AppTest.from_file(APP_PATH, default_timeout=10).run()
-    at = _scan(at, "000000000001")
+    at = _scan(at, UNKNOWN_RAW)
     at = _button(at, "fs_btn_fallback").click().run()
     if cancel_key == "fs_btn_cancel_preview":
         at.text_input[0].input("99999")
         at = _button(at, "fs_btn_find").click().run()
     at = _button(at, cancel_key).click().run()
-    assert fallback_service.confirms == []
+    assert fallback_service.registrations == []
+    assert _ticket_in_session(at) is None and "manual_employee" not in at.session_state
     assert at.text_input[0].label == "Card scan" and _button(at, "fs_btn_fallback") is None
 
 
-def test_employee_not_found_stays_on_manual_screen_without_writing(fallback_service):
+def test_new_scan_clears_previous_card(fallback_service):
+    at = AppTest.from_file(APP_PATH, default_timeout=10).run()
+    at = _scan(at, UNKNOWN_RAW)
+    assert _ticket_in_session(at) is not None
+    fallback_service.outcome = ScanOutcome.RECORDED
+    at = _scan(at, "000012345678")
+    assert _ticket_in_session(at) is None
+
+
+def test_lapsed_offer_clears_card(fallback_service):
+    at = AppTest.from_file(APP_PATH, default_timeout=10).run()
+    at = _scan(at, UNKNOWN_RAW)
+    offered_at, sequence = at.session_state["fallback_offer"]
+    at.session_state["fallback_offer"] = (offered_at - 21, sequence)  # offer shown > 20 s ago
+    at = at.run()
+    assert _ticket_in_session(at) is None and _button(at, "fs_btn_fallback") is None
+
+
+def test_employee_not_found_stays_on_manual_screen_without_registering(fallback_service):
     fallback_service.lookup_status = ManualLookupStatus.EMPLOYEE_NOT_FOUND
     at = AppTest.from_file(APP_PATH, default_timeout=10).run()
-    at = _scan(at, "000000000001")
+    at = _scan(at, UNKNOWN_RAW)
     at = _button(at, "fs_btn_fallback").click().run()
     at.text_input[0].input("12345")
     at = _button(at, "fs_btn_find").click().run()
     assert "Employee not found. No scan was recorded." in _markup(at)
-    assert fallback_service.confirms == [] and _button(at, "fs_btn_confirm") is None
+    assert fallback_service.registrations == [] and _button(at, "fs_btn_register") is None
 
 
-def test_data_integrity_error_returns_to_scanner_without_writing(fallback_service):
+def test_data_integrity_error_returns_to_scanner_without_registering(fallback_service):
     fallback_service.lookup_status = ManualLookupStatus.DATA_INTEGRITY_ERROR
     at = AppTest.from_file(APP_PATH, default_timeout=10).run()
-    at = _scan(at, "000000000001")
+    at = _scan(at, UNKNOWN_RAW)
     at = _button(at, "fs_btn_fallback").click().run()
     at.text_input[0].input("99999")
     at = _button(at, "fs_btn_find").click().run()
-    assert "Code E03" in _markup(at) and fallback_service.confirms == []
-    assert at.text_input[0].label == "Card scan"
+    assert "Code E03" in _markup(at) and fallback_service.registrations == []
+    assert at.text_input[0].label == "Card scan" and _ticket_in_session(at) is None

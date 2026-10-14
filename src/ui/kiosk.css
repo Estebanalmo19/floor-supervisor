@@ -219,6 +219,14 @@ body:has([class*="st-key-scan_input_"] input:focus) .fs-scan-icon {
     color: var(--color-ink);
 }
 
+/* "✓ Card registered / ✓ Scan registered" after a fallback card registration. */
+.fs-checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: clamp(26px, 4.4vw, 38px);
+}
+
 .fs-subtitle {
     margin: 0;
     font-size: clamp(16px, 2.4vw, 20px);

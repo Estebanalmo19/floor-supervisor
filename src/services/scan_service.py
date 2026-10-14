@@ -4,9 +4,11 @@ All business rules for a scan live here; the Streamlit UI only calls the public
 methods and renders the returned results.
 
 Card flow:            process_scan(raw)
-Manual HiBob fallback (only after CARD_NOT_RESOLVED, which issues a FallbackTicket):
-                      lookup_manual(ticket, hibob_id)   -> preview, never writes
-                      confirm_manual(ticket, employee)  -> records the event
+Manual HiBob fallback (only after CARD_NOT_RESOLVED, which issues a FallbackTicket
+carrying the raw card value in server-side session state):
+                      lookup_manual(ticket, hibob_id)              -> preview, never writes
+                      register_card_and_confirm(ticket, employee)  -> Card Resolver /cards/update,
+                                                                      then records the event
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from typing import Any, Callable, Protocol
 
 from src.exceptions import (
     CardNotResolvedError,
+    CardResolverError,
     CardResolverResponseError,
     CardResolverUnavailableError,
     EmployeeDataIntegrityError,
@@ -28,6 +31,7 @@ from src.exceptions import (
 from src.logging_setup import mask_card_value
 from src.models.employee import Employee
 from src.models.scan import (
+    CardRegistration,
     CardResolution,
     EntryMethod,
     FallbackReason,
@@ -41,6 +45,7 @@ from src.models.scan import (
     ScanResult,
     ScanWarning,
 )
+from src.services.card_resolver import CARD_NUMBER_RAW_MAX_LENGTH
 from src.services.employee_service import EmployeeLookup
 
 logger = logging.getLogger(__name__)
@@ -58,7 +63,12 @@ def utc_now() -> datetime:
 
 
 class CardResolver(Protocol):
+    @property
+    def registration_enabled(self) -> bool: ...
+
     def resolve(self, raw: str) -> CardResolution: ...
+
+    def update_card(self, card_number_raw: str, hibob_id: str) -> CardRegistration: ...
 
 
 class EmployeeLookupService(Protocol):
@@ -117,10 +127,12 @@ class ScanService:
             resolution = self._resolver.resolve(raw)
         except CardNotResolvedError as exc:
             _log_failure("card_not_resolved", exc)
-            # Only this outcome unlocks the manual HiBob fallback.
+            # Only this outcome unlocks the fallback, and only if the card can be registered.
+            ticket = None
+            if self._resolver.registration_enabled and len(raw) <= CARD_NUMBER_RAW_MAX_LENGTH:
+                ticket = FallbackTicket(issued_at=scanned_at, device_id=self._device_id, card_raw=raw)
             return ScanResult(outcome=ScanOutcome.CARD_NOT_RESOLVED, scanned_at=scanned_at,
-                              fallback_ticket=FallbackTicket(issued_at=scanned_at,
-                                                             device_id=self._device_id))
+                              fallback_ticket=ticket)
         except CardResolverUnavailableError as exc:
             _log_failure("card_resolver_unavailable", exc)
             return ScanResult(outcome=ScanOutcome.RESOLVER_UNAVAILABLE, scanned_at=scanned_at)
@@ -189,29 +201,50 @@ class ScanService:
                           "hibob_id": hibob_id if MANUAL_HIBOB_ID_PATTERN.fullmatch(hibob_id) else None})
         return result
 
-    def confirm_manual(self, ticket: FallbackTicket | None, employee: Employee) -> ScanResult:
-        """'Confirm scan': the only manual-fallback action that writes a scan_event."""
+    def register_card_and_confirm(self, ticket: FallbackTicket | None,
+                                  employee: Employee) -> ScanResult:
+        """'Register card & check in': the only manual-fallback action that writes.
+
+        Order: valid ticket -> Card Resolver /cards/update -> scan_event -> mirror.
+        No scan_event is created unless the card registration succeeded.
+        """
         scanned_at = self._now()
         started = time.perf_counter()
-        if not self._ticket_valid(ticket):
+        card: str | None = None
+        if ticket is None or not self._ticket_valid(ticket):
             result = ScanResult(outcome=ScanOutcome.FALLBACK_EXPIRED, scanned_at=scanned_at,
                                 entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK)
         else:
-            event = NewScanEvent(
-                hibob_id=employee.employee_id,
-                hibob_lookup_status=HibobLookupStatus.FOUND,
-                employee=employee,
-                device_id=self._device_id,
-                scanned_at=scanned_at,
-                entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK,
-                fallback_reason=FallbackReason.CARD_NOT_RESOLVED,
-            )
-            base = {"scanned_at": scanned_at, "hibob_id": employee.employee_id,
-                    "display_name": employee.employee_name}
-            result = self._record(event, base, _warnings_for(
-                EmployeeLookup(status=HibobLookupStatus.FOUND, employee=employee)))
-        self._log_processed(result, scanned_at, started, card=None)
+            card = mask_card_value(ticket.card_raw)
+            try:
+                registration = self._resolver.update_card(ticket.card_raw, employee.employee_id)
+            except CardResolverError as exc:
+                _log_failure("card_registration_failed", exc, hibob_id=employee.employee_id, card=card)
+                result = ScanResult(outcome=ScanOutcome.CARD_REGISTRATION_FAILED, scanned_at=scanned_at,
+                                    hibob_id=employee.employee_id, display_name=employee.employee_name,
+                                    entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK)
+            else:
+                logger.info("card_registered", extra={
+                    "status": registration.status, "hibob_id": registration.hibob_id,
+                    "card": card, "device_id": self._device_id})
+                result = self._record_manual(employee, scanned_at)
+        self._log_processed(result, scanned_at, started, card=card)
         return result
+
+    def _record_manual(self, employee: Employee, scanned_at: datetime) -> ScanResult:
+        event = NewScanEvent(
+            hibob_id=employee.employee_id,
+            hibob_lookup_status=HibobLookupStatus.FOUND,
+            employee=employee,
+            device_id=self._device_id,
+            scanned_at=scanned_at,
+            entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK,
+            fallback_reason=FallbackReason.CARD_NOT_RESOLVED,
+        )
+        base = {"scanned_at": scanned_at, "hibob_id": employee.employee_id,
+                "display_name": employee.employee_name, "card_registered": True}
+        return self._record(event, base, _warnings_for(
+            EmployeeLookup(status=HibobLookupStatus.FOUND, employee=employee)))
 
     # ----------------------------------------------------------------- internals
 
@@ -254,7 +287,7 @@ class ScanService:
         if result.outcome.is_accepted and result.warnings:
             log_level = logging.WARNING  # e.g. EMPLOYEE_NOT_ACTIVE: logged, never shown on the kiosk
         if result.outcome in (ScanOutcome.DATABASE_ERROR, ScanOutcome.DATA_INTEGRITY_ERROR,
-                              ScanOutcome.RESOLVER_ERROR):
+                              ScanOutcome.RESOLVER_ERROR, ScanOutcome.CARD_REGISTRATION_FAILED):
             log_level = logging.ERROR
         logger.log(
             log_level,
@@ -294,7 +327,11 @@ def names_match(employee: Employee, resolver_name: str) -> bool:
     return _normalize_name(employee.employee_name) == _normalize_name(resolver_name)
 
 
-def _log_failure(event: str, exc: Exception, hibob_id: str | None = None) -> None:
-    # Exception messages are constructed by this application and contain no secrets.
-    logger.warning(event, extra={"error_type": type(exc).__name__, "error": str(exc),
-                                 "hibob_id": hibob_id})
+def _log_failure(event: str, exc: Exception, hibob_id: str | None = None,
+                 card: str | None = None) -> None:
+    # Exception messages are constructed by this application and contain no secrets or
+    # card values; ``card`` must already be masked.
+    extra: dict[str, Any] = {"error_type": type(exc).__name__, "error": str(exc), "hibob_id": hibob_id}
+    if card is not None:
+        extra["card"] = card
+    logger.warning(event, extra=extra)

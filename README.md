@@ -101,7 +101,9 @@ https://<floor-supervisor-host>/  →  Nginx  →  http://127.0.0.1:8003/
 ## Before production
 
 - Restrict the Floor Supervisor Nginx `server` block (`location /`) to the allowed
-  site/corporate IP range (there is no login).
+  site/corporate IP range (there is no login). This matters more now that the
+  "Card not recognized" fallback writes card mappings to Card Resolver
+  (`/cards/update`, HTTP Basic: `CARD_RESOLVER_UPDATE_USERNAME/PASSWORD`).
 - Nginx must proxy WebSockets (`/_stcore/stream`): `proxy_http_version 1.1`,
   `Upgrade`/`Connection` headers, long `proxy_read_timeout`.
 - Validate scanner input + autofocus on the real tablet/browser.

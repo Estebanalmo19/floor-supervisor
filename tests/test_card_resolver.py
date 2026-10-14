@@ -153,3 +153,110 @@ def test_token_never_appears_in_errors_logs_or_repr(caplog):
     assert TOKEN not in repr(client)
     assert TOKEN not in caplog.text
     assert RAW not in str(exc_info.value)
+
+
+# --- update_card (/cards/update, HTTP Basic) ----------------------------------------------
+
+import base64  # noqa: E402
+
+from src.exceptions import CardRegistrationRejectedError  # noqa: E402
+
+UPDATE_URL = "https://resolver.test/card-resolver/api/v1/cards/update"
+UPDATE_USER, UPDATE_PASSWORD = "kiosk", "upd4te-pa55word"
+UPDATE_OK = {"status": "unchanged", "card_number_raw": RAW,
+             "decoder": {"format": "h10304-reversed", "bits": 37, "facility_code": 123, "card_number": 4567},
+             "hibob_id": "99999"}
+
+
+def _update_client(handler, credentials=(UPDATE_USER, UPDATE_PASSWORD)) -> CardResolverClient:
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    return CardResolverClient(URL, TOKEN, timeout_seconds=5, http_client=http,
+                              update_url=UPDATE_URL, update_credentials=credentials)
+
+
+def test_update_request_shape_uses_basic_auth_not_bearer():
+    seen = {}
+
+    def handler(request):
+        seen.update(method=request.method, url=str(request.url), auth=request.headers.get("Authorization"),
+                    body=json.loads(request.content))
+        return httpx.Response(200, json=UPDATE_OK)
+
+    registration = _update_client(handler).update_card(RAW, "99999")
+    assert registration.status == "unchanged" and registration.hibob_id == "99999"
+    assert seen["method"] == "POST" and seen["url"] == UPDATE_URL
+    expected = base64.b64encode(f"{UPDATE_USER}:{UPDATE_PASSWORD}".encode()).decode()
+    assert seen["auth"] == f"Basic {expected}" and TOKEN not in seen["auth"]
+    # overwrite=false: the kiosk can never take a card that belongs to someone else.
+    assert seen["body"] == {"card_number_raw": RAW, "hibob_id": "99999", "overwrite": False}
+
+
+@pytest.mark.parametrize("status_value", ["unchanged", "created", "updated"])
+def test_update_status_is_informational(status_value):
+    body = {**UPDATE_OK, "status": status_value}
+    assert _update_client(_respond(200, body)).update_card(RAW, "99999").status == status_value
+
+
+def test_update_without_credentials_is_not_attempted():
+    calls = []
+    client = _update_client(lambda r: calls.append(r) or httpx.Response(200, json=UPDATE_OK), credentials=None)
+    assert client.registration_enabled is False
+    with pytest.raises(CardResolverResponseError):
+        client.update_card(RAW, "99999")
+    assert calls == []
+
+
+@pytest.mark.parametrize(("status", "error"), [
+    (401, CardResolverResponseError), (403, CardResolverResponseError),
+    (400, CardRegistrationRejectedError), (404, CardRegistrationRejectedError),
+    (409, CardRegistrationRejectedError), (422, CardRegistrationRejectedError),
+    (408, CardResolverUnavailableError), (429, CardResolverUnavailableError),
+    (500, CardResolverUnavailableError), (503, CardResolverUnavailableError),
+    (302, CardResolverResponseError),
+])
+def test_update_error_statuses(status, error):
+    with pytest.raises(error):
+        _update_client(_respond(status, {"detail": "x"})).update_card(RAW, "99999")
+
+
+@pytest.mark.parametrize("exc", [httpx.ReadTimeout, httpx.ConnectError])
+def test_update_transport_failures_are_unavailable(exc):
+    def handler(request):
+        raise exc("boom", request=request)
+
+    with pytest.raises(CardResolverUnavailableError):
+        _update_client(handler).update_card(RAW, "99999")
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda b: b.update(hibob_id="11111"),
+    lambda b: b.pop("hibob_id"),
+    lambda b: b.update(hibob_id=99999),
+    lambda b: b.update(card_number_raw="999999999999"),
+    lambda b: b.pop("status"),
+    lambda b: b.update(status=""),
+    lambda b: b.update(status=7),
+], ids=["id-mismatch", "id-missing", "id-int", "raw-mismatch", "no-status", "blank-status", "int-status"])
+def test_update_malformed_or_mismatching_bodies_are_rejected(mutate):
+    body = json.loads(json.dumps(UPDATE_OK))
+    mutate(body)
+    with pytest.raises(CardResolverResponseError):
+        _update_client(_respond(200, body)).update_card(RAW, "99999")
+
+
+@pytest.mark.parametrize("content", [b"<html>gateway</html>", b"[]"])
+def test_update_non_object_bodies_are_rejected(content):
+    with pytest.raises(CardResolverResponseError):
+        _update_client(_respond(200, content=content)).update_card(RAW, "99999")
+
+
+@pytest.mark.parametrize("status", [401, 409, 500, 200])
+def test_update_errors_never_leak_card_or_credentials(caplog, status):
+    caplog.set_level(logging.DEBUG)
+    body = {**UPDATE_OK, "hibob_id": "11111"} if status == 200 else {"detail": f"card {RAW} taken"}
+    client = _update_client(_respond(status, body))
+    with pytest.raises(Exception) as exc_info:
+        client.update_card(RAW, "99999")
+    for secret in (RAW, UPDATE_PASSWORD, TOKEN):
+        assert secret not in str(exc_info.value) and secret not in caplog.text
+    assert UPDATE_PASSWORD not in repr(client)

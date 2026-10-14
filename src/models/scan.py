@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 
@@ -36,6 +36,7 @@ class ScanOutcome(StrEnum):
     DATA_INTEGRITY_ERROR = "DATA_INTEGRITY_ERROR"
     DATABASE_ERROR = "DATABASE_ERROR"
     FALLBACK_EXPIRED = "FALLBACK_EXPIRED"
+    CARD_REGISTRATION_FAILED = "CARD_REGISTRATION_FAILED"
 
     @property
     def is_accepted(self) -> bool:
@@ -57,15 +58,28 @@ class CardResolution:
 
 
 @dataclass(frozen=True)
+class CardRegistration:
+    """Successful Card Resolver /cards/update answer (only the fields Floor Supervisor uses)."""
+
+    status: str  # informational, e.g. "unchanged"; success is HTTP 200 + matching hibob_id
+    hibob_id: str
+
+
+@dataclass(frozen=True)
 class FallbackTicket:
-    """Permission to use the manual HiBob fallback.
+    """Permission to register the unrecognized card via the manual HiBob fallback.
 
     Issued only by ScanService when a card scan ends in CARD_NOT_RESOLVED. It lives
     in server-side session state, so the browser cannot create or alter one.
+
+    ``card_raw`` is the raw value of the failed scan, needed for /cards/update. It is
+    held only here (never persisted, logged unmasked or rendered) and is hidden from
+    repr so it cannot leak through logs or tracebacks.
     """
 
     issued_at: datetime
     device_id: str
+    card_raw: str = field(repr=False)
 
     def is_valid_at(self, now: datetime) -> bool:
         return self.issued_at <= now < self.issued_at + FALLBACK_TICKET_TTL
@@ -132,6 +146,8 @@ class ScanResult:
     entry_method: EntryMethod = EntryMethod.CARD
     # Present only for CARD_NOT_RESOLVED: unlocks the manual HiBob fallback.
     fallback_ticket: FallbackTicket | None = None
+    # True when the fallback linked the card in Card Resolver before recording.
+    card_registered: bool = False
 
 
 class ManualLookupStatus(StrEnum):

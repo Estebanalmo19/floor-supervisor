@@ -101,3 +101,35 @@ def test_power_automate_invalid_values_rejected_without_leaking(key, value):
         load_settings({**VALID_ENV, key: value})
     assert key in str(exc_info.value)
     assert "TOPSECRETSIG" not in str(exc_info.value)
+
+
+# --- Card Resolver /cards/update (HTTP Basic) ----------------------------------------------
+
+UPDATE_ENV = {"CARD_RESOLVER_UPDATE_USERNAME": "kiosk", "CARD_RESOLVER_UPDATE_PASSWORD": "TOPSECRETPW"}
+
+
+def test_card_registration_disabled_without_update_credentials():
+    settings = load_settings(VALID_ENV)
+    assert settings.card_resolver.registration_enabled is False
+    assert settings.card_resolver.update_url is None
+
+
+def test_card_registration_enabled_with_credentials_and_derived_url():
+    settings = load_settings({**VALID_ENV, **UPDATE_ENV})
+    resolver = settings.card_resolver
+    assert resolver.registration_enabled is True
+    assert resolver.update_url == resolver.url.removesuffix("/cards/resolve") + "/cards/update"
+    assert "TOPSECRETPW" not in repr(settings)
+
+
+@pytest.mark.parametrize("env", [
+    {"CARD_RESOLVER_UPDATE_USERNAME": "kiosk"},
+    {"CARD_RESOLVER_UPDATE_PASSWORD": "TOPSECRETPW"},
+    {**UPDATE_ENV, "CARD_RESOLVER_UPDATE_PASSWORD": "<secret>"},
+    {**UPDATE_ENV, "CARD_RESOLVER_URL": "https://resolver.test/other/path"},
+])
+def test_card_registration_config_errors_do_not_leak(env):
+    with pytest.raises(ConfigError) as exc_info:
+        load_settings({**VALID_ENV, **env})
+    assert "CARD_RESOLVER" in str(exc_info.value)
+    assert "TOPSECRETPW" not in str(exc_info.value)

@@ -100,16 +100,18 @@ def test_name_mismatch_is_not_a_warning_type():
 
 
 def test_card_not_resolved_is_error_and_offers_fallback_only_with_ticket():
-    ticket = FallbackTicket(issued_at=T0, device_id="TABLET")
+    ticket = FallbackTicket(issued_at=T0, device_id="TABLET", card_raw="000012345678")
     view = present(ScanResult(outcome=ScanOutcome.CARD_NOT_RESOLVED, scanned_at=T0,
                               fallback_ticket=ticket), BOGOTA)
     assert view.tone == "error"
     assert view.title == "Card not recognized"
-    assert view.message == "Try scanning the card again or enter the employee HiBob ID."
+    assert view.message == "This card is not registered yet. Enter your HiBob ID to register this card."
     assert view.recorded is False
     assert view.offers_manual_fallback is True
+    assert "000012345678" not in repr(view)
     no_ticket = present(ScanResult(outcome=ScanOutcome.CARD_NOT_RESOLVED, scanned_at=T0), BOGOTA)
     assert no_ticket.offers_manual_fallback is False
+    assert no_ticket.message == "This card is not registered yet. Please contact your supervisor."
 
 
 @pytest.mark.parametrize("outcome", [ScanOutcome.RESOLVER_UNAVAILABLE, ScanOutcome.RESOLVER_ERROR,
@@ -127,6 +129,31 @@ def test_manual_recorded_shows_success_with_manual_entry_badge():
     assert view.tone == "success" and view.title == "Scan registered"
     assert view.badge == "Manual entry"
     assert present(_result(ScanOutcome.RECORDED), BOGOTA).badge is None
+
+
+def test_card_registered_shows_checklist_without_manual_badge():
+    registered = ScanResult(outcome=ScanOutcome.RECORDED, scanned_at=T0, hibob_id="99999",
+                            display_name="Test Employee", employee=TEST_EMPLOYEE, event_id=7,
+                            entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK, card_registered=True)
+    view = present(registered, BOGOTA)
+    assert view.tone == "success" and view.recorded is True
+    assert view.checklist == ("Card registered", "Scan registered")
+    assert view.badge is None and view.employee_name == "Test Employee"
+
+
+def test_duplicate_after_card_registration_mentions_registration():
+    duplicate = ScanResult(outcome=ScanOutcome.DUPLICATE, scanned_at=T0, hibob_id="99999",
+                           display_name="Test Employee", employee=TEST_EMPLOYEE, event_id=7,
+                           entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK, card_registered=True)
+    view = present(duplicate, BOGOTA)
+    assert view.tone == "info" and view.title == "Already registered"
+    assert view.message.startswith("Card registered.") and "No additional record" in view.message
+
+
+def test_card_registration_failed_is_an_error_without_details():
+    view = present(ScanResult(outcome=ScanOutcome.CARD_REGISTRATION_FAILED, scanned_at=T0,
+                              hibob_id="99999", entry_method=EntryMethod.MANUAL_HIBOB_FALLBACK), BOGOTA)
+    assert view.tone == "error" and view.recorded is False and view.reference == "E05"
 
 
 def test_fallback_expired_view():

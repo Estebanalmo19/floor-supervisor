@@ -30,11 +30,20 @@ class AppContext:
 def build_app_context(settings: Settings) -> AppContext:
     configure_logging(settings.log_level)
     pool = create_pool(settings.database)
+    resolver_settings = settings.card_resolver
     card_resolver = CardResolverClient(
-        url=settings.card_resolver.url,
-        bearer_token=settings.card_resolver.bearer_token,
-        timeout_seconds=settings.card_resolver.timeout_seconds,
+        url=resolver_settings.url,
+        bearer_token=resolver_settings.bearer_token,
+        timeout_seconds=resolver_settings.timeout_seconds,
+        update_url=resolver_settings.update_url,
+        update_credentials=(
+            (resolver_settings.update_username, resolver_settings.update_password)
+            if resolver_settings.registration_enabled else None),
     )
+    if not card_resolver.registration_enabled:
+        logging.getLogger(__name__).warning(
+            "card_registration_disabled",
+            extra={"reason": "CARD_RESOLVER_UPDATE_USERNAME/PASSWORD not set"})
     power_automate = None
     if settings.power_automate.enabled:
         power_automate = PowerAutomateClient(

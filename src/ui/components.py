@@ -57,7 +57,7 @@ def _idle_layer() -> str:
 def _result_layer(view: ResultView, ttl_seconds: float, sequence: int) -> str:
     parts = [
         f'<div class="fs-result-icon" aria-hidden="true">{_RESULT_ICONS.get(view.icon, "!")}</div>',
-        f'<h1 class="fs-title">{escape(view.title)}</h1>',
+        _title_html(view),
     ]
     if view.badge:
         parts.append(f'<span class="fs-badge">{escape(view.badge)}</span>')
@@ -83,6 +83,14 @@ def _result_layer(view: ResultView, ttl_seconds: float, sequence: int) -> str:
         + "".join(parts)
         + "</section>"
     )
+
+
+def _title_html(view: ResultView) -> str:
+    if view.checklist:
+        items = "".join(f'<span class="fs-check-item">{_RESULT_ICONS["check"]} {escape(item)}</span>'
+                        for item in view.checklist)
+        return f'<h1 class="fs-title fs-checklist">{items}</h1>'
+    return f'<h1 class="fs-title">{escape(view.title)}</h1>'
 
 
 def stage_html(view: ResultView | None = None, ttl_seconds: float = 0.0, sequence: int = 0) -> str:
@@ -120,26 +128,29 @@ def manual_entry_html(inline_message: str | None = None) -> str:
                if inline_message else "")
     return (
         '<section class="fs-manual" aria-label="Enter HiBob ID">'
-        '<p class="fs-manual-eyebrow">Card not recognized · Manual entry</p>'
-        '<h1 class="fs-title">Enter HiBob ID</h1>'
-        '<p class="fs-subtitle">Type the employee HiBob ID, then select Find employee.</p>'
+        '<p class="fs-manual-eyebrow">Card not recognized · Register card</p>'
+        '<h1 class="fs-title">HiBob ID</h1>'
+        '<p class="fs-subtitle">Enter your HiBob ID to register this card.</p>'
         f"{message}</section>"
     )
 
 
-def manual_preview_html(employee: Employee) -> str:
-    """Employee preview before 'Confirm scan'. Name, job title and site only (never status)."""
+def manual_preview_html(employee: Employee, inline_message: str | None = None) -> str:
+    """Employee preview before 'Register card & check in'. Name, job title and site only
+    (never employment status, never the card value)."""
     rows = [("Name", employee.employee_name), ("Job title", employee.job_title),
             ("Site", employee.site)]
     items = "".join(
         f'<div class="fs-preview-row"><dt>{escape(label)}</dt><dd>{escape(value or "—")}</dd></div>'
         for label, value in rows
     )
+    message = (f'<p class="fs-inline-message" role="alert">{escape(inline_message)}</p>'
+               if inline_message else "")
     return (
         '<section class="fs-manual" aria-label="Confirm employee">'
-        '<p class="fs-manual-eyebrow">Manual entry · Confirm employee</p>'
-        '<h1 class="fs-title">Is this the employee?</h1>'
+        '<p class="fs-manual-eyebrow">Register card · Confirm employee</p>'
+        '<h1 class="fs-title">Is this you?</h1>'
         f'<dl class="fs-preview">{items}</dl>'
-        '<p class="fs-subtitle">The scan is recorded only after Confirm scan.</p>'
-        "</section>"
+        '<p class="fs-subtitle">This card will be linked to this employee.</p>'
+        f"{message}</section>"
     )

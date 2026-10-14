@@ -13,6 +13,7 @@ from src.exceptions import (
 )
 from src.models.employee import Employee
 from src.models.scan import (
+    CardRegistration,
     CardResolution,
     HibobLookupStatus,
     NewScanEvent,
@@ -44,16 +45,33 @@ class FakeClock:
 
 @dataclass
 class FakeResolver:
+    """Card Resolver stand-in. update_card() adds a mapping that resolve() then honours,
+    like the real service (registered cards resolve before ``error`` applies)."""
+
     resolution: CardResolution | None = RESOLUTION
     error: Exception | None = None
     calls: list[str] = field(default_factory=list)
+    registration_enabled: bool = True
+    update_error: Exception | None = None
+    updates: list[tuple[str, str]] = field(default_factory=list)
+    registered: dict[str, str] = field(default_factory=dict)
 
     def resolve(self, raw: str) -> CardResolution:
         self.calls.append(raw)
+        if raw in self.registered:
+            return CardResolution(self.registered[raw], "Test Employee", 99)
         if self.error:
             raise self.error
         assert self.resolution is not None
         return self.resolution
+
+    def update_card(self, card_number_raw: str, hibob_id: str) -> CardRegistration:
+        self.updates.append((card_number_raw, hibob_id))
+        if self.update_error:
+            raise self.update_error
+        status = "unchanged" if self.registered.get(card_number_raw) == hibob_id else "created"
+        self.registered[card_number_raw] = hibob_id
+        return CardRegistration(status=status, hibob_id=hibob_id)
 
 
 @dataclass

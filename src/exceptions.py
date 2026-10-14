@@ -31,6 +31,10 @@ class CardResolverResponseError(CardResolverError):
     """Unexpected status (e.g. 401/403) or a malformed response body."""
 
 
+class CardRegistrationRejectedError(CardResolverError):
+    """Card Resolver refused a card mapping (4xx, e.g. card already owned by someone else)."""
+
+
 # --- Persistence -------------------------------------------------------------
 
 
